@@ -24,9 +24,18 @@ export default function Navbar() {
 
                 {/* Desktop Navigation */}
                 <div className="hidden md:flex gap-8">
-                    <Link href="/#features" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Features</Link>
-                    <Link href="/#how-it-works" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">How It Works</Link>
-                    <Link href="/#pricing" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Pricing</Link>
+                    {session?.user ? (
+                        <>
+                            <Link href="/dashboard/companies" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">My Companies</Link>
+                            <Link href="/companies" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">All Companies</Link>
+                        </>
+                    ) : (
+                        <>
+                            <Link href="/#features" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Features</Link>
+                            <Link href="/#how-it-works" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">How It Works</Link>
+                            <Link href="/#pricing" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Pricing</Link>
+                        </>
+                    )}
                 </div>
 
                 {/* Desktop Auth */}
@@ -86,9 +95,18 @@ export default function Navbar() {
             {/* Mobile Menu */}
             {mobileMenuOpen && (
                 <div className="mobile-menu-glass flex flex-col gap-1 px-6 pb-6 pt-4 border-t border-border-default bg-[rgba(10,10,15,0.95)]">
-                    <Link href="/#features" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Features</Link>
-                    <Link href="/#how-it-works" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>How It Works</Link>
-                    <Link href="/#pricing" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Pricing</Link>
+                    {session?.user ? (
+                        <>
+                            <Link href="/dashboard/companies" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>My Companies</Link>
+                            <Link href="/companies" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>All Companies</Link>
+                        </>
+                    ) : (
+                        <>
+                            <Link href="/#features" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Features</Link>
+                            <Link href="/#how-it-works" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>How It Works</Link>
+                            <Link href="/#pricing" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Pricing</Link>
+                        </>
+                    )}
                     <div className="py-2"><ThemeToggle /></div>
                     <div className="flex flex-col gap-3 mt-4 pt-4 border-t border-border-default">
                         {session?.user ? (
