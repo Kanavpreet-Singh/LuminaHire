@@ -26,8 +26,10 @@ model User {
   role      UserRole @default(CANDIDATE)
   candidate Candidate?
 
+  companyName String? // Used if role is RECRUITER
+  jobPostings JobPosting[] // Used if role is RECRUITER
+
   accounts    Account[]
-  companies   Company[]
 
   @@map("users")
 }
@@ -35,23 +37,6 @@ model User {
 enum UserRole {
   RECRUITER
   CANDIDATE
-}
-
-model Company {
-  id        String   @id @default(cuid())
-  name      String
-  info      String?  @db.Text
-  pdfUrl    String?  @db.Text
-  pdfPublicId String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  ownerId String
-  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-
-  jobPostings JobPosting[]
-
-  @@map("companies")
 }
 
 // ----------------------------------------------------------------------
@@ -65,8 +50,11 @@ model JobPosting {
   requirements String?    @db.Text
   status       JobStatus  @default(OPEN)
   
-  companyId    String
-  company      Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  recruiterId  String
+  recruiter    User       @relation(fields: [recruiterId], references: [id], onDelete: Cascade)
+  
+  // Vector embedding for semantic matching (1536 dimensions in database).
+  embedding    Unsupported("vector(1536)")?
   
   applications Application[]
   

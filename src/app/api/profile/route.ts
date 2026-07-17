@@ -54,10 +54,18 @@ export async function GET() {
                 email: user.email,
             },
         });
-        return NextResponse.json({ candidate: newCandidate, role: user.role });
+        return NextResponse.json({
+            candidate: newCandidate,
+            role: user.role,
+            user: { name: user.name, email: user.email, companyName: user.companyName }
+        });
     }
 
-    return NextResponse.json({ candidate: user.candidate, role: user.role });
+    return NextResponse.json({
+        candidate: user.candidate,
+        role: user.role,
+        user: { name: user.name, email: user.email, companyName: user.companyName }
+    });
 }
 
 export async function POST(req: Request) {
@@ -66,17 +74,37 @@ export async function POST(req: Request) {
         return new NextResponse("Unauthorized", { status: 401 });
     }
 
-    const { resumeUrl, phone } = await req.json();
+    const body = await req.json();
 
     const user = await prisma.user.findUnique({
         where: { email: session.user.email },
         include: { candidate: true },
     });
 
-    if (!user || user.role !== "CANDIDATE") {
-        return new NextResponse("Unauthorized or not a candidate", { status: 401 });
+    if (!user) {
+        return new NextResponse("User not found", { status: 404 });
     }
 
+    if (user.role === "RECRUITER") {
+        const { name, companyName } = body;
+        const updatedUser = await prisma.user.update({
+            where: { id: user.id },
+            data: {
+                name: name !== undefined ? name : undefined,
+                companyName: companyName !== undefined ? companyName : undefined,
+            }
+        });
+        return NextResponse.json({
+            success: true,
+            user: {
+                name: updatedUser.name,
+                email: updatedUser.email,
+                companyName: updatedUser.companyName,
+            }
+        });
+    }
+
+    const { resumeUrl, phone } = body;
     // 1. Save or Update the standard fields
     const updatedCandidate = await prisma.candidate.upsert({
         where: { userId: user.id },

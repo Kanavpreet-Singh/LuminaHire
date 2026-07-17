@@ -67,6 +67,11 @@ async def global_exception_handler(request: Request, exc: Exception):
 class ProcessResumeRequest(BaseModel):
     resume_url: str
 
+class ProcessJobRequest(BaseModel):
+    title: str
+    description: str
+    requirements: str | None = None
+
 
 class ProcessResumeResponse(BaseModel):
     resume_text: str
@@ -75,6 +80,10 @@ class ProcessResumeResponse(BaseModel):
     embedding_dimensions: int
     ocr_used: bool
 
+
+class ProcessJobResponse(BaseModel):
+    embedding: list[float]
+    embedding_dimensions: int
 
 # ── Gemini Embeddings ────────────────────────────────────────
 _HTTP_EMBEDDING_MODEL_CANDIDATES = [
@@ -289,6 +298,30 @@ async def process_resume(req: ProcessResumeRequest):
         if tmp_path and os.path.exists(tmp_path):
             os.unlink(tmp_path)
 
+@app.post("/process-job", response_model=ProcessJobResponse)
+async def process_job(req: ProcessJobRequest):
+    """
+    Generates a Gemini embedding vector for a job posting.
+    """
+    try:
+        # Combine text for context
+        full_text = f"Title: {req.title}\n\nDescription:\n{req.description}"
+        if req.requirements:
+            full_text += f"\n\nRequirements:\n{req.requirements}"
+            
+        print(f"Generating embedding for job posting ({len(full_text)} chars)...")
+        embedding_vector = _embed_text(full_text)
+        
+        return ProcessJobResponse(
+            embedding=embedding_vector,
+            embedding_dimensions=len(embedding_vector)
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        print(f"Error processing job: {e}")
+        raise HTTPException(status_code=500, detail=f"Job processing failed: {str(e)}")
 
 # ── Health Check ─────────────────────────────────────────────
 @app.get("/health")

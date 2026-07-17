@@ -5,7 +5,7 @@ import prisma from "@/lib/prisma";
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { name, email, password, role } = body;
+        const { name, email, password, role, companyName } = body;
 
         if (!email || !password) {
             return NextResponse.json(
@@ -53,6 +53,7 @@ export async function POST(request: Request) {
                 email,
                 hashedPassword,
                 role: userRole,
+                companyName: userRole === "RECRUITER" ? (companyName || null) : null,
                 // Automatically create a blank Candidate profile if they sign up as a candidate
                 ...(userRole === "CANDIDATE" ? {
                     candidate: {

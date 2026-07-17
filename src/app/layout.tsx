@@ -38,10 +38,10 @@ export default function RootLayout({
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=Saira+Stencil:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet" />
       </head>
-      <body className={`${inter.variable} font-sans antialiased`}>
+      <body className={`${inter.variable} font-sans antialiased flex flex-col min-h-screen`}>
         <AuthProvider>
           <Navbar />
-          <main className="pt-[72px]">{children}</main>
+          <main className="flex-grow pt-[72px] flex flex-col">{children}</main>
           <Footer />
           <Chatbot />
         </AuthProvider>

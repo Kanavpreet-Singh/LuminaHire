@@ -3,6 +3,7 @@ import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
 import prisma from "@/lib/prisma";
+import { cookies } from "next/headers";
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
     providers: [
@@ -73,6 +74,17 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                 });
 
                 if (!existingUser) {
+                    // Try to get role from cookies
+                    let role = "CANDIDATE";
+                    try {
+                        const cookieStore = await cookies();
+                        if (cookieStore.get("intended_role")?.value === "RECRUITER") {
+                            role = "RECRUITER";
+                        }
+                    } catch (e) {
+                        // ignore cookie errors
+                    }
+
                     // Create new user for Google sign-in
                     const newUser = await prisma.user.create({
                         data: {
@@ -80,6 +92,15 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                             name: user.name,
                             image: user.image,
                             emailVerified: new Date(),
+                            role: role as any,
+                            ...(role === "CANDIDATE" ? {
+                                candidate: {
+                                    create: {
+                                        name: user.name || "",
+                                        email: user.email!,
+                                    }
+                                }
+                            } : {})
                         },
                     });
 
@@ -154,7 +175,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         async session({ session, token }) {
             if (session.user) {
                 session.user.id = token.id as string;
-                session.user.role = token.role as string;
+                (session.user as any).role = token.role as string;
             }
             return session;
         },

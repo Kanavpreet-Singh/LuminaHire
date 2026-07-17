@@ -25,9 +25,9 @@ export default function Footer() {
                     <div>
                         <h4 className="text-[0.85rem] font-semibold text-content-primary uppercase tracking-[0.08em] mb-4">Product</h4>
                         <ul className="list-none flex flex-col gap-2.5">
-                            <li><Link href="/#features" className="text-[0.85rem] text-content-tertiary no-underline transition-colors duration-200 hover:text-content-primary">Features</Link></li>
-                            <li><Link href="/#pricing" className="text-[0.85rem] text-content-tertiary no-underline transition-colors duration-200 hover:text-content-primary">Pricing</Link></li>
-                            <li><Link href="/#how-it-works" className="text-[0.85rem] text-content-tertiary no-underline transition-colors duration-200 hover:text-content-primary">How It Works</Link></li>
+                            <li><a href="/#features" className="text-[0.85rem] text-content-tertiary no-underline transition-colors duration-200 hover:text-content-primary">Features</a></li>
+                            <li><a href="/#pricing" className="text-[0.85rem] text-content-tertiary no-underline transition-colors duration-200 hover:text-content-primary">Pricing</a></li>
+                            <li><a href="/#how-it-works" className="text-[0.85rem] text-content-tertiary no-underline transition-colors duration-200 hover:text-content-primary">How It Works</a></li>
                         </ul>
                     </div>
 

@@ -64,8 +64,8 @@ function ParticleCanvas() {
 
     function resize() {
       const dpr = window.devicePixelRatio || 1;
-      w = canvas!.clientWidth;
-      h = canvas!.clientHeight;
+      w = canvas!.parentElement?.clientWidth || window.innerWidth;
+      h = canvas!.parentElement?.clientHeight || window.innerHeight;
       canvas!.width = w * dpr;
       canvas!.height = h * dpr;
       ctx!.scale(dpr, dpr);

@@ -10,38 +10,37 @@ export default function Navbar() {
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
     return (
-        <nav className="navbar-glass fixed top-0 left-0 right-0 z-[1000] bg-[rgba(10,10,15,0.8)] backdrop-blur-[20px] border-b border-border-default transition-all duration-300">
+        <nav className="navbar-glass fixed top-0 left-0 right-0 z-[1000] backdrop-blur-[20px] border-b border-border-default transition-all duration-300">
             <div className="max-w-[1280px] mx-auto px-6 h-[72px] flex items-center justify-between">
                 {/* Logo */}
-                <Link href="/" className="flex items-center gap-2.5 no-underline text-content-primary font-bold text-xl">
+                <a href="/" className="flex items-center gap-2.5 no-underline text-content-primary font-bold text-xl">
                     <div className="flex items-center justify-center w-10 h-10 rounded-md bg-[image:var(--gradient-primary)] text-white">
                         <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                         </svg>
                     </div>
                     <span className="gradient-text text-[1.375rem] tracking-[-0.02em] font-bold">LuminaHire</span>
-                </Link>
+                </a>
 
                 {/* Desktop Navigation */}
                 <div className="hidden md:flex gap-8">
                     {session?.user ? (
                         (session.user as any).role === "RECRUITER" ? (
                             <>
-                                <Link href="/dashboard/companies" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">My Companies</Link>
-                                <Link href="/companies" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">All Companies</Link>
+                                <Link href="/dashboard" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Dashboard</Link>
                                 <Link href="/profile" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">My Profile</Link>
                             </>
                         ) : (
                             <>
-                                <Link href="/companies" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Explore Jobs</Link>
+                                <Link href="/jobs" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Explore Jobs</Link>
                                 <Link href="/profile" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">My Profile</Link>
                             </>
                         )
                     ) : (
                         <>
-                            <Link href="/#features" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Features</Link>
-                            <Link href="/#how-it-works" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">How It Works</Link>
-                            <Link href="/#pricing" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Pricing</Link>
+                            <a href="/#features" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Features</a>
+                            <a href="/#how-it-works" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">How It Works</a>
+                            <a href="/#pricing" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Pricing</a>
                         </>
                     )}
                 </div>
@@ -106,21 +105,20 @@ export default function Navbar() {
                     {session?.user ? (
                         (session.user as any).role === "RECRUITER" ? (
                             <>
-                                <Link href="/dashboard/companies" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>My Companies</Link>
-                                <Link href="/companies" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>All Companies</Link>
+                                <Link href="/dashboard" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Dashboard</Link>
                                 <Link href="/profile" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>My Profile</Link>
                             </>
                         ) : (
                             <>
-                                <Link href="/companies" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Explore Jobs</Link>
+                                <Link href="/jobs" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Explore Jobs</Link>
                                 <Link href="/profile" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>My Profile</Link>
                             </>
                         )
                     ) : (
                         <>
-                            <Link href="/#features" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Features</Link>
-                            <Link href="/#how-it-works" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>How It Works</Link>
-                            <Link href="/#pricing" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Pricing</Link>
+                            <a href="/#features" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Features</a>
+                            <a href="/#how-it-works" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>How It Works</a>
+                            <a href="/#pricing" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Pricing</a>
                         </>
                     )}
                     <div className="py-2"><ThemeToggle /></div>

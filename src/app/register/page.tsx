@@ -13,6 +13,7 @@ export default function RegisterPage() {
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
     const [role, setRole] = useState<"RECRUITER" | "CANDIDATE">("CANDIDATE");
+    const [companyName, setCompanyName] = useState("");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
     const [googleLoading, setGoogleLoading] = useState(false);
@@ -47,7 +48,7 @@ export default function RegisterPage() {
             const res = await fetch("/api/register", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name, email, password, role }),
+                body: JSON.stringify({ name, email, password, role, companyName }),
             });
 
             const data = await res.json();
@@ -86,6 +87,8 @@ export default function RegisterPage() {
         setError("");
         setShowGoogleHint(false);
         try {
+            // Store the intended role in a cookie so the backend can read it during OAuth callback
+            document.cookie = `intended_role=${role}; path=/; max-age=3600`;
             await signIn("google", { callbackUrl: "/" });
         } catch {
             setError("Google sign-in failed. Please try again.");
@@ -94,12 +97,15 @@ export default function RegisterPage() {
     }
 
     return (
-        <div className="min-h-screen flex items-center justify-center py-8 px-6 relative overflow-hidden">
-            {/* Background glow */}
-            <div className="absolute -top-[40%] left-1/2 -translate-x-1/2 w-[800px] h-[800px] rounded-full bg-[radial-gradient(circle,rgba(124,58,237,0.1)_0%,transparent_70%)] blur-[80px]" />
+        <div className="flex-1 flex items-center justify-center py-8 px-6 relative bg-surface-primary text-content-primary">
+            {/* Background grid & glows with contained overflow */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none z-[1]">
+                <div className="absolute inset-0 hero-grid-pattern opacity-30" />
+                <div className="absolute -top-[40%] left-1/2 -translate-x-1/2 w-[800px] h-[800px] rounded-full bg-[radial-gradient(circle,rgba(124,58,237,0.08)_0%,transparent_70%)] blur-[80px]" />
+            </div>
 
             {/* Auth Card */}
-            <div className="auth-card-light relative w-full max-w-[440px] p-10 max-md:p-7 rounded-xl bg-surface-card border border-border-default backdrop-blur-[20px]">
+            <div className="auth-card-light relative w-full max-w-[440px] p-10 max-md:p-7 rounded-xl bg-surface-card border border-border-default backdrop-blur-[20px] z-10 shadow-2xl">
                 {/* Header */}
                 <div className="text-center mb-8">
                     <Link href="/" className="no-underline">
@@ -138,8 +144,8 @@ export default function RegisterPage() {
                 <form onSubmit={handleSubmit} className="flex flex-col gap-5">
                     {error && (
                         <div className={showGoogleHint
-                            ? "form-warning-light py-3.5 px-4 rounded-md bg-warning-400/10 border border-warning-400/25 text-warning-400 text-[0.85rem] flex flex-col gap-3 animate-fadeInUp"
-                            : "py-3 px-4 rounded-md bg-danger-400/10 border border-danger-400/20 text-danger-400 text-[0.85rem]"
+                            ? "form-warning-light py-3.5 px-4 rounded-md bg-warning-500/10 border border-warning-500/25 text-warning-600 dark:text-warning-300 text-[0.85rem] flex flex-col gap-3 animate-fadeInUp"
+                            : "py-3 px-4 rounded-md bg-danger-500/10 border border-danger-500/25 text-danger-600 dark:text-danger-400 text-[0.85rem]"
                         }>
                             <span>{error}</span>
                             {showGoogleHint && (
@@ -211,6 +217,21 @@ export default function RegisterPage() {
                             required
                         />
                     </div>
+
+                    {role === "RECRUITER" && (
+                        <div className="flex flex-col gap-2">
+                            <label htmlFor="companyName" className="text-[0.85rem] font-medium text-content-secondary">Company Name</label>
+                            <input
+                                id="companyName"
+                                type="text"
+                                className="form-input-light w-full py-3 px-4 rounded-md border border-border-default bg-surface-secondary text-content-primary text-[0.9rem] font-[var(--font-sans)] transition-all duration-200 outline-none focus:border-brand-500 focus:shadow-[0_0_0_3px_rgba(124,58,237,0.1)] placeholder:text-content-tertiary"
+                                placeholder="Acme Corp"
+                                value={companyName}
+                                onChange={(e) => setCompanyName(e.target.value)}
+                                required
+                            />
+                        </div>
+                    )}
 
                     <div className="flex flex-col gap-2">
                         <label htmlFor="password" className="text-[0.85rem] font-medium text-content-secondary">Password</label>
