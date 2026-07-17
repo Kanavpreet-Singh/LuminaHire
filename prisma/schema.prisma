@@ -1,14 +1,16 @@
-// StackMemo - AI-Powered Technical Decision Log
+// LuminaHire - Agentic HR Tech Platform
 // Database: PostgreSQL (NeonDB)
 
 generator client {
-  provider = "prisma-client-js"
-  output   = "../src/generated/prisma"
+  provider        = "prisma-client-js"
+  output          = "../src/generated/prisma"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
 }
 
 model User {
@@ -21,23 +23,122 @@ model User {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  accounts  Account[]
-  companies Company[]
+  role      UserRole @default(CANDIDATE)
+  candidate Candidate?
+
+  accounts    Account[]
+  companies   Company[]
 
   @@map("users")
+}
+
+enum UserRole {
+  RECRUITER
+  CANDIDATE
 }
 
 model Company {
   id        String   @id @default(cuid())
   name      String
   info      String?  @db.Text
+  pdfUrl    String?  @db.Text
+  pdfPublicId String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   ownerId String
   owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
+  jobPostings JobPosting[]
+
   @@map("companies")
+}
+
+// ----------------------------------------------------------------------
+// NEW LUMINAHIRE MODELS
+// ----------------------------------------------------------------------
+
+model JobPosting {
+  id           String     @id @default(cuid())
+  title        String
+  description  String     @db.Text
+  requirements String?    @db.Text
+  status       JobStatus  @default(OPEN)
+  
+  companyId    String
+  company      Company    @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  applications Application[]
+  
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  
+  @@map("job_postings")
+}
+
+enum JobStatus {
+  OPEN
+  PAUSED
+  CLOSED
+}
+
+model Candidate {
+  id          String   @id @default(cuid())
+  
+  userId      String?  @unique
+  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  name        String
+  email       String   @unique
+  phone       String?
+  
+  resumeUrl   String?  @db.Text
+  resumeText  String?  @db.Text
+  skills      String[]
+  
+  // Vector embedding for semantic search (1536 dimensions in database).
+  embedding   Unsupported("vector(1536)")? 
+  
+  applications Application[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("candidates")
+}
+
+model Application {
+  id          String   @id @default(cuid())
+  
+  candidateId String
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  
+  jobId       String
+  job         JobPosting @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  
+  status      AppStatus @default(PENDING)
+  
+  matchScore  Float?
+  aiSummary   String?    @db.Text
+  aiPros      String[]
+  aiCons      String[]
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([candidateId, jobId])
+  @@map("applications")
+}
+
+enum AppStatus {
+  PENDING
+  AI_PROCESSING
+  AI_SHORTLISTED
+  AI_REJECTED
+  HUMAN_APPROVED
+  INTERVIEWING
+  OFFERED
+  REJECTED
 }
 
 model Account {

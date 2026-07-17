@@ -62,7 +62,7 @@ export default function Chatbot() {
           <div className="p-4 bg-zinc-900 text-white flex justify-between items-center bg-gradient-to-r from-zinc-900 to-zinc-800">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-              <h3 className="font-semibold text-sm">StackMemo AI</h3>
+              <h3 className="font-semibold text-sm">LuminaHire AI</h3>
             </div>
             <button 
               onClick={() => setIsOpen(false)}

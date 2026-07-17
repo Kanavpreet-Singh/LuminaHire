@@ -53,6 +53,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
                     email: user.email,
                     name: user.name,
                     image: user.image,
+                    role: user.role,
                 };
             },
         }),
@@ -139,12 +140,21 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         async jwt({ token, user }) {
             if (user) {
                 token.id = user.id;
+                // Add role to token if we have the user object (initial sign in)
+                if ('role' in user) {
+                    token.role = user.role;
+                } else {
+                    // For OAuth, fetch role from DB
+                    const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
+                    token.role = dbUser?.role || "CANDIDATE";
+                }
             }
             return token;
         },
         async session({ session, token }) {
             if (session.user) {
                 session.user.id = token.id as string;
+                session.user.role = token.role as string;
             }
             return session;
         },

@@ -98,7 +98,7 @@ export default function LoginPage() {
                         </div>
                     </Link>
                     <h1 className="text-2xl font-bold mb-2 text-content-primary font-display">Welcome back</h1>
-                    <p className="text-[0.9rem] text-content-secondary">Sign in to your StackMemo account</p>
+                    <p className="text-[0.9rem] text-content-secondary">Sign in to your LuminaHire account</p>
                 </div>
 
                 {/* Google Sign-In */}

@@ -1,6 +1,29 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
+import { deleteCompanyPdf, uploadCompanyPdf } from "@/lib/cloudinary";
+
+async function readCompanyRequest(request: Request) {
+    const contentType = request.headers.get("content-type") ?? "";
+
+    if (contentType.includes("multipart/form-data")) {
+        const formData = await request.formData();
+
+        return {
+            info: formData.get("info"),
+            name: formData.get("name"),
+            pdf: formData.get("pdf"),
+        };
+    }
+
+    const body = await request.json();
+
+    return {
+        info: body.info,
+        name: body.name,
+        pdf: null,
+    };
+}
 
 // GET /api/companies/[id] — get single company with owner info
 export async function GET(
@@ -41,6 +64,8 @@ export async function PUT(
     request: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
+    let uploadedPdf: Awaited<ReturnType<typeof uploadCompanyPdf>> | null = null;
+
     try {
         const session = await auth();
         if (!session?.user?.id) {
@@ -70,10 +95,14 @@ export async function PUT(
             );
         }
 
-        const body = await request.json();
-        const { info, name } = body;
+        const { info, name, pdf } = await readCompanyRequest(request);
 
-        const updateData: { info?: string; name?: string } = {};
+        const updateData: {
+            info?: string;
+            name?: string;
+            pdfUrl?: string | null;
+            pdfPublicId?: string | null;
+        } = {};
 
         if (typeof info === "string") {
             updateData.info = info;
@@ -89,6 +118,46 @@ export async function PUT(
             updateData.name = name.trim();
         }
 
+        if (pdf instanceof File && pdf.size > 0) {
+            if (pdf.type !== "application/pdf") {
+                return NextResponse.json(
+                    { error: "Only PDF files are allowed" },
+                    { status: 400 }
+                );
+            }
+
+            if (pdf.size > 15 * 1024 * 1024) {
+                return NextResponse.json(
+                    { error: "PDF must be 15MB or smaller" },
+                    { status: 400 }
+                );
+            }
+
+            const previousPdfPublicId = company.pdfPublicId;
+            uploadedPdf = await uploadCompanyPdf(pdf);
+
+            updateData.pdfUrl = uploadedPdf.url;
+            updateData.pdfPublicId = uploadedPdf.publicId;
+
+            const updated = await prisma.company.update({
+                where: { id },
+                data: updateData,
+                include: {
+                    owner: {
+                        select: { id: true, name: true, email: true },
+                    },
+                },
+            });
+
+            if (previousPdfPublicId && previousPdfPublicId !== uploadedPdf.publicId) {
+                void deleteCompanyPdf(previousPdfPublicId).catch((cleanupError) => {
+                    console.error("Error deleting old company PDF:", cleanupError);
+                });
+            }
+
+            return NextResponse.json({ company: updated });
+        }
+
         const updated = await prisma.company.update({
             where: { id },
             data: updateData,
@@ -101,6 +170,11 @@ export async function PUT(
 
         return NextResponse.json({ company: updated });
     } catch (error) {
+        if (uploadedPdf?.publicId) {
+            void deleteCompanyPdf(uploadedPdf.publicId).catch((cleanupError) => {
+                console.error("Error deleting uploaded PDF after update failure:", cleanupError);
+            });
+        }
         console.error("Error updating company:", error);
         return NextResponse.json(
             { error: "Failed to update company" },

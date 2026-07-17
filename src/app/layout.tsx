@@ -12,16 +12,15 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "StackMemo — AI-Powered Technical Decision Log",
+  title: "LuminaHire — Agentic HR Tech Platform",
   description:
-    "Capture the 'why' behind your code. StackMemo uses AI to turn raw developer notes into structured, searchable technical context.",
+    "Automate your entire hiring pipeline with agentic AI. LuminaHire screens resumes, matches skills, and conducts outreach so you can focus on interviewing the best talent.",
   keywords: [
-    "technical decision log",
-    "architecture decision record",
-    "ADR",
-    "knowledge management",
-    "developer tools",
-    "AI documentation",
+    "recruitment",
+    "hr tech",
+    "ai agents",
+    "hiring",
+    "resume screening",
   ],
 };
 

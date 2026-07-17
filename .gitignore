@@ -41,3 +41,9 @@ yarn-error.log*
 next-env.d.ts
 
 /src/generated/prisma
+
+CN_notes.pdf
+python/venv/
+python/__pycache__/
+python/test_genai.py
+python/test_api.py

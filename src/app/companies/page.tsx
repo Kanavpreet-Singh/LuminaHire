@@ -65,7 +65,7 @@ export default function AllCompaniesPage() {
                         All <span className="gradient-text">Companies</span>
                     </h1>
                     <p className="text-content-secondary text-base max-w-xl mx-auto">
-                        Browse all companies registered on StackMemo and see who&apos;s behind each one.
+                        Browse all companies registered on LuminaHire and see who&apos;s behind each one.
                     </p>
                 </div>
 

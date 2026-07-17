@@ -5,7 +5,7 @@ import prisma from "@/lib/prisma";
 export async function POST(request: Request) {
     try {
         const body = await request.json();
-        const { name, email, password } = body;
+        const { name, email, password, role } = body;
 
         if (!email || !password) {
             return NextResponse.json(
@@ -45,11 +45,23 @@ export async function POST(request: Request) {
 
         const hashedPassword = await bcrypt.hash(password, 12);
 
+        const userRole = role === "RECRUITER" ? "RECRUITER" : "CANDIDATE";
+
         const user = await prisma.user.create({
             data: {
                 name,
                 email,
                 hashedPassword,
+                role: userRole,
+                // Automatically create a blank Candidate profile if they sign up as a candidate
+                ...(userRole === "CANDIDATE" ? {
+                    candidate: {
+                        create: {
+                            name: name || "",
+                            email: email,
+                        }
+                    }
+                } : {})
             },
         });
 

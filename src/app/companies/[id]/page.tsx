@@ -9,6 +9,8 @@ interface CompanyDetail {
     id: string;
     name: string;
     info: string | null;
+    pdfUrl: string | null;
+    pdfPublicId: string | null;
     createdAt: string;
     updatedAt: string;
     owner: { id: string; name: string | null; email: string; image: string | null };
@@ -25,9 +27,11 @@ export default function CompanyPage() {
     // Edit state
     const [editing, setEditing] = useState(false);
     const [infoText, setInfoText] = useState("");
+    const [pdfFile, setPdfFile] = useState<File | null>(null);
     const [saving, setSaving] = useState(false);
     const [saveMsg, setSaveMsg] = useState("");
     const [error, setError] = useState("");
+    const [deletingPdf, setDeletingPdf] = useState(false);
 
     // Delete state
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -56,15 +60,22 @@ export default function CompanyPage() {
     async function handleSaveInfo() {
         setError(""); setSaveMsg(""); setSaving(true);
         try {
+            const formData = new FormData();
+            formData.append("info", infoText);
+
+            if (pdfFile) {
+                formData.append("pdf", pdfFile);
+            }
+
             const res = await fetch(`/api/companies/${id}`, {
                 method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ info: infoText }),
+                body: formData,
             });
             const data = await res.json();
             if (!res.ok) { setError(data.error); return; }
             setCompany(data.company);
             setEditing(false);
+            setPdfFile(null);
             setSaveMsg("Info saved successfully!");
             setTimeout(() => setSaveMsg(""), 3000);
         } catch { setError("Failed to save"); }
@@ -93,11 +104,39 @@ export default function CompanyPage() {
             if (res.ok) {
                 setCompany(data.company);
                 setInfoText("");
+                setPdfFile(null);
                 setSaveMsg("Info cleared!");
                 setTimeout(() => setSaveMsg(""), 3000);
             }
         } catch { setError("Failed to clear info"); }
         finally { setSaving(false); }
+    }
+
+    async function handleDeletePdf() {
+        if (!company?.pdfUrl) return;
+        setError("");
+        setSaveMsg("");
+        setDeletingPdf(true);
+
+        try {
+            const res = await fetch(`/api/companies/${id}/pdf`, {
+                method: "DELETE",
+            });
+            const data = await res.json();
+
+            if (!res.ok) {
+                setError(data.error || "Failed to delete PDF");
+                return;
+            }
+
+            setCompany(data.company);
+            setSaveMsg("PDF removed successfully!");
+            setTimeout(() => setSaveMsg(""), 3000);
+        } catch {
+            setError("Failed to delete PDF");
+        } finally {
+            setDeletingPdf(false);
+        }
     }
 
     if (loading) {
@@ -211,6 +250,25 @@ export default function CompanyPage() {
                                 rows={6}
                                 autoFocus
                             />
+                            <div className="mt-4">
+                                <label className="block text-xs font-semibold uppercase tracking-[0.18em] text-content-tertiary mb-2">
+                                    Company PDF
+                                </label>
+                                <input
+                                    type="file"
+                                    accept="application/pdf"
+                                    className="block w-full text-sm text-content-secondary file:mr-4 file:rounded-lg file:border-0 file:bg-brand-600 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-brand-500"
+                                    onChange={(e) => setPdfFile(e.target.files?.[0] ?? null)}
+                                />
+                                {pdfFile && (
+                                    <p className="mt-2 text-xs text-content-tertiary">Selected: {pdfFile.name}</p>
+                                )}
+                                {!pdfFile && company.pdfUrl && (
+                                    <p className="mt-2 text-xs text-content-tertiary">
+                                        Current PDF: <a href={company.pdfUrl} target="_blank" rel="noreferrer" className="text-brand-400 hover:underline">Open current file</a>
+                                    </p>
+                                )}
+                            </div>
                             <div className="flex gap-3 mt-4">
                                 <button onClick={handleSaveInfo} disabled={saving}
                                     className="py-2.5 px-6 rounded-lg text-sm font-semibold text-white bg-brand-600 hover:bg-brand-500 transition-all disabled:opacity-50">
@@ -237,6 +295,49 @@ export default function CompanyPage() {
                             )}
                         </div>
                     )}
+
+                    <div className="mt-6 pt-6 border-t border-border-default">
+                        <div className="flex items-center justify-between gap-4 mb-4">
+                            <h3 className="text-sm font-bold text-content-primary">Company PDF</h3>
+                            {company.pdfUrl && (
+                                <div className="flex items-center gap-3">
+                                    <a href={company.pdfUrl} target="_blank" rel="noreferrer" className="text-xs font-semibold text-brand-400 hover:underline">
+                                        Open PDF
+                                    </a>
+                                    {isOwner && (
+                                        <button
+                                            onClick={handleDeletePdf}
+                                            disabled={deletingPdf}
+                                            className="text-xs font-semibold text-danger-400 hover:text-danger-300 disabled:opacity-50"
+                                        >
+                                            {deletingPdf ? "Removing..." : "Remove PDF"}
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        {company.pdfUrl ? (
+                            <div className="space-y-4">
+                                <div className="overflow-hidden rounded-xl border border-border-default bg-surface-secondary">
+                                    <iframe
+                                        title={`${company.name} PDF`}
+                                        src={company.pdfUrl}
+                                        className="h-[560px] w-full"
+                                    />
+                                </div>
+                                <p className="text-xs text-content-tertiary break-all">
+                                    Stored on Cloudinary: <a href={company.pdfUrl} target="_blank" rel="noreferrer" className="text-brand-400 hover:underline">{company.pdfUrl}</a>
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="text-center py-8 rounded-xl bg-surface-secondary/30 border border-border-default border-dashed">
+                                <p className="text-content-tertiary text-sm italic">
+                                    {isOwner ? "No PDF uploaded yet. Add one while editing this company." : "No PDF has been uploaded for this company yet."}
+                                </p>
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 {/* Delete Section (Owner only) */}

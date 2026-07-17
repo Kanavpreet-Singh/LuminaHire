@@ -12,6 +12,7 @@ export default function RegisterPage() {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [confirmPassword, setConfirmPassword] = useState("");
+    const [role, setRole] = useState<"RECRUITER" | "CANDIDATE">("CANDIDATE");
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
     const [googleLoading, setGoogleLoading] = useState(false);
@@ -46,7 +47,7 @@ export default function RegisterPage() {
             const res = await fetch("/api/register", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name, email, password }),
+                body: JSON.stringify({ name, email, password, role }),
             });
 
             const data = await res.json();
@@ -158,6 +159,31 @@ export default function RegisterPage() {
                             )}
                         </div>
                     )}
+
+                    <div className="flex bg-surface-secondary border border-border-default rounded-md p-1 gap-1">
+                        <button
+                            type="button"
+                            onClick={() => setRole("CANDIDATE")}
+                            className={`flex-1 py-2 text-sm font-medium rounded-sm transition-all duration-200 ${
+                                role === "CANDIDATE" 
+                                    ? "bg-[image:var(--gradient-primary)] text-white shadow-md" 
+                                    : "text-content-secondary hover:text-content-primary"
+                            }`}
+                        >
+                            Candidate
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setRole("RECRUITER")}
+                            className={`flex-1 py-2 text-sm font-medium rounded-sm transition-all duration-200 ${
+                                role === "RECRUITER" 
+                                    ? "bg-[image:var(--gradient-primary)] text-white shadow-md" 
+                                    : "text-content-secondary hover:text-content-primary"
+                            }`}
+                        >
+                            Recruiter
+                        </button>
+                    </div>
 
                     <div className="flex flex-col gap-2">
                         <label htmlFor="name" className="text-[0.85rem] font-medium text-content-secondary">Full Name</label>

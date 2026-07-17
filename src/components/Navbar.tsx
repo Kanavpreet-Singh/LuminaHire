@@ -19,16 +19,24 @@ export default function Navbar() {
                             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                         </svg>
                     </div>
-                    <span className="gradient-text text-[1.375rem] tracking-[-0.02em] font-bold">StackMemo</span>
+                    <span className="gradient-text text-[1.375rem] tracking-[-0.02em] font-bold">LuminaHire</span>
                 </Link>
 
                 {/* Desktop Navigation */}
                 <div className="hidden md:flex gap-8">
                     {session?.user ? (
-                        <>
-                            <Link href="/dashboard/companies" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">My Companies</Link>
-                            <Link href="/companies" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">All Companies</Link>
-                        </>
+                        (session.user as any).role === "RECRUITER" ? (
+                            <>
+                                <Link href="/dashboard/companies" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">My Companies</Link>
+                                <Link href="/companies" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">All Companies</Link>
+                                <Link href="/profile" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">My Profile</Link>
+                            </>
+                        ) : (
+                            <>
+                                <Link href="/companies" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Explore Jobs</Link>
+                                <Link href="/profile" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">My Profile</Link>
+                            </>
+                        )
                     ) : (
                         <>
                             <Link href="/#features" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Features</Link>
@@ -96,10 +104,18 @@ export default function Navbar() {
             {mobileMenuOpen && (
                 <div className="mobile-menu-glass flex flex-col gap-1 px-6 pb-6 pt-4 border-t border-border-default bg-[rgba(10,10,15,0.95)]">
                     {session?.user ? (
-                        <>
-                            <Link href="/dashboard/companies" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>My Companies</Link>
-                            <Link href="/companies" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>All Companies</Link>
-                        </>
+                        (session.user as any).role === "RECRUITER" ? (
+                            <>
+                                <Link href="/dashboard/companies" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>My Companies</Link>
+                                <Link href="/companies" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>All Companies</Link>
+                                <Link href="/profile" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>My Profile</Link>
+                            </>
+                        ) : (
+                            <>
+                                <Link href="/companies" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Explore Jobs</Link>
+                                <Link href="/profile" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>My Profile</Link>
+                            </>
+                        )
                     ) : (
                         <>
                             <Link href="/#features" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Features</Link>

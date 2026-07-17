@@ -9,6 +9,7 @@ interface Company {
     id: string;
     name: string;
     info: string | null;
+    pdfUrl: string | null;
     createdAt: string;
     updatedAt: string;
 }
@@ -20,6 +21,8 @@ export default function MyCompaniesPage() {
     const [loading, setLoading] = useState(true);
     const [showCreateForm, setShowCreateForm] = useState(false);
     const [companyName, setCompanyName] = useState("");
+    const [companyInfo, setCompanyInfo] = useState("");
+    const [companyPdf, setCompanyPdf] = useState<File | null>(null);
     const [creating, setCreating] = useState(false);
     const [error, setError] = useState("");
     const [successMsg, setSuccessMsg] = useState("");
@@ -54,10 +57,17 @@ export default function MyCompaniesPage() {
         setCreating(true);
 
         try {
+            const formData = new FormData();
+            formData.append("name", companyName);
+            formData.append("info", companyInfo);
+
+            if (companyPdf) {
+                formData.append("pdf", companyPdf);
+            }
+
             const res = await fetch("/api/companies", {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name: companyName }),
+                body: formData,
             });
 
             const data = await res.json();
@@ -69,6 +79,8 @@ export default function MyCompaniesPage() {
 
             setSuccessMsg(`"${data.company.name}" created successfully!`);
             setCompanyName("");
+            setCompanyInfo("");
+            setCompanyPdf(null);
             setShowCreateForm(false);
             fetchCompanies();
             setTimeout(() => setSuccessMsg(""), 3000);
@@ -133,8 +145,8 @@ export default function MyCompaniesPage() {
                 {showCreateForm && (
                     <div className="mb-8 p-6 rounded-2xl bg-surface-card border border-border-default backdrop-blur-[20px] animate-fadeInUp">
                         <h2 className="text-lg font-bold text-content-primary mb-4 font-display">Create a New Company</h2>
-                        <form onSubmit={handleCreate} className="flex flex-col sm:flex-row gap-4">
-                            <div className="flex-1">
+                        <form onSubmit={handleCreate} className="space-y-4">
+                            <div>
                                 <input
                                     id="company-name-input"
                                     type="text"
@@ -147,6 +159,26 @@ export default function MyCompaniesPage() {
                                     autoFocus
                                 />
                             </div>
+                            <textarea
+                                className="form-input-light w-full py-3 px-4 rounded-lg border border-border-default bg-surface-secondary text-content-primary text-[0.9rem] font-[var(--font-sans)] transition-all duration-200 outline-none focus:border-brand-500 focus:shadow-[0_0_0_3px_rgba(124,58,237,0.1)] placeholder:text-content-tertiary resize-y min-h-[120px]"
+                                placeholder="Optional company info..."
+                                value={companyInfo}
+                                onChange={(e) => setCompanyInfo(e.target.value)}
+                            />
+                            <div>
+                                <label className="block text-xs font-semibold uppercase tracking-[0.18em] text-content-tertiary mb-2">
+                                    Optional PDF
+                                </label>
+                                <input
+                                    type="file"
+                                    accept="application/pdf"
+                                    className="block w-full text-sm text-content-secondary file:mr-4 file:rounded-lg file:border-0 file:bg-brand-600 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-brand-500"
+                                    onChange={(e) => setCompanyPdf(e.target.files?.[0] ?? null)}
+                                />
+                                {companyPdf && (
+                                    <p className="mt-2 text-xs text-content-tertiary">Selected: {companyPdf.name}</p>
+                                )}
+                            </div>
                             <div className="flex gap-3">
                                 <button
                                     type="submit"
@@ -157,7 +189,7 @@ export default function MyCompaniesPage() {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={() => { setShowCreateForm(false); setError(""); setCompanyName(""); }}
+                                    onClick={() => { setShowCreateForm(false); setError(""); setCompanyName(""); setCompanyInfo(""); setCompanyPdf(null); }}
                                     className="py-3 px-6 rounded-lg text-sm font-medium text-content-secondary bg-surface-tertiary border border-border-default hover:bg-surface-card-hover transition-all duration-200"
                                 >
                                     Cancel

@@ -14,10 +14,10 @@ export default function Footer() {
                                     <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
                                 </svg>
                             </div>
-                            <span className="gradient-text text-[1.375rem] tracking-[-0.02em] font-bold">StackMemo</span>
+                            <span className="gradient-text text-[1.375rem] tracking-[-0.02em] font-bold">LuminaHire</span>
                         </div>
                         <p className="text-[0.85rem] text-content-tertiary leading-relaxed max-w-[320px]">
-                            AI-powered technical decision log. Capture the "why" behind your code and build a structured, searchable knowledge base.
+                            AI-powered recruitment platform. Automate your hiring pipeline with agentic AI and find the best talent faster.
                         </p>
                     </div>
 
@@ -54,7 +54,7 @@ export default function Footer() {
 
                 {/* Bottom Bar */}
                 <div className="flex flex-col md:flex-row items-center justify-between pt-8 border-t border-border-default text-[0.8rem] text-content-tertiary gap-4 text-center md:text-left">
-                    <p>&copy; {new Date().getFullYear()} StackMemo. All rights reserved.</p>
+                    <p>&copy; {new Date().getFullYear()} LuminaHire. All rights reserved.</p>
                     <div className="flex gap-4">
                         <a href="#" aria-label="Twitter" className="text-content-tertiary transition-colors duration-200 hover:text-content-primary">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
