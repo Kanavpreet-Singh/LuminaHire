@@ -3,9 +3,9 @@ uvicorn==0.34.3
 langchain==0.3.25
 langchain-community==0.3.24
 langchain-google-genai==2.1.5
-langgraph==1.2.9
+langgraph==0.6.11
 google-genai==2.12.1
 pypdf==5.6.0
 requests==2.32.3
-pydantic==2.11.3
+pydantic==2.13.4
 python-dotenv==1.1.0
