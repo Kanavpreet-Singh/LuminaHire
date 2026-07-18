@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
+import { PYTHON_API_URL } from "@/lib/vetting";
 
 export async function POST(req: Request) {
     try {
@@ -83,7 +84,7 @@ export async function POST(req: Request) {
         }
 
         // Call the python microservice to run Agent 1: Planner
-        const pythonResponse = await fetch("http://127.0.0.1:8000/vet/initiate", {
+        const pythonResponse = await fetch(`${PYTHON_API_URL}/vet/initiate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({

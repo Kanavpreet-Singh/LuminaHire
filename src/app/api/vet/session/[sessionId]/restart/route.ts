@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
+import { PYTHON_API_URL } from "@/lib/vetting";
 
 export async function POST(
     req: Request,
@@ -38,7 +39,7 @@ export async function POST(
         }
 
         // Trigger Python microservice to execute planner
-        const pythonResponse = await fetch("http://127.0.0.1:8000/vet/initiate", {
+        const pythonResponse = await fetch(`${PYTHON_API_URL}/vet/initiate`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
