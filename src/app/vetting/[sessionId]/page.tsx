@@ -143,6 +143,12 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
     const [qaQuestion, setQaQuestion] = useState("");
     const [askingQuestion, setAskingQuestion] = useState(false);
 
+    // Completed-view stage inspector: which pipeline stage's stored output is
+    // shown. Every stage's data is persisted on the session (researchPlan,
+    // researchResults, evaluation, finalReport), so a completed session can be
+    // reviewed stage by stage at any time.
+    const [completedTab, setCompletedTab] = useState<"plan" | "research" | "evaluation" | "report">("report");
+
     useEffect(() => {
         fetchSession();
     }, [sessionId]);
@@ -571,6 +577,13 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                             </div>
 
                             <div className="flex flex-col items-start sm:items-end gap-3">
+                                <Link
+                                    href="/vetting"
+                                    className="inline-flex items-center gap-1.5 text-xs font-bold text-content-tertiary transition-colors hover:text-white"
+                                >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7"></path></svg>
+                                    All Sessions
+                                </Link>
                                 <div className={`px-4 py-2 rounded-2xl border text-xs font-black uppercase tracking-[0.18em] ${
                                     isPlanning ? "border-amber-400/30 bg-amber-400/10 text-amber-300" :
                                     isResearching ? "border-sky-400/30 bg-sky-400/10 text-sky-300" :
@@ -1162,6 +1175,246 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
 
                 {isCompleted && sessionData.finalReport && (
                     <div className="space-y-8 animate-in fade-in duration-300">
+                        {/* Stage inspector: revisit any pipeline stage's stored output */}
+                        <div className="bg-surface-card border border-border-default rounded-2xl p-2 shadow-md flex flex-wrap gap-2">
+                            {([
+                                ["plan", "1 · Plan"],
+                                ["research", "2 · Research"],
+                                ["evaluation", "3 · Evaluation"],
+                                ["report", "4 · Final Report"],
+                            ] as const).map(([key, label]) => (
+                                <button
+                                    key={key}
+                                    onClick={() => setCompletedTab(key)}
+                                    className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                                        completedTab === key
+                                            ? "bg-brand-500 text-white shadow-sm"
+                                            : "text-content-secondary hover:bg-surface-secondary"
+                                    }`}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* Stage 1: Planner output (read-only) */}
+                        {completedTab === "plan" && (
+                            <div className="space-y-6 animate-in fade-in duration-300">
+                                {!sessionData.researchPlan ? (
+                                    <div className="bg-surface-card border border-border-default rounded-3xl p-8 text-center text-sm text-content-tertiary shadow-md">
+                                        No planner output was stored for this session.
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-4 shadow-md">
+                                            <h3 className="text-lg font-bold text-content-primary">Core Skills to Verify</h3>
+                                            <div className="flex flex-wrap gap-2">
+                                                {(sessionData.researchPlan.core_skills_to_verify || []).map((skill, idx) => (
+                                                    <span key={idx} className="px-3 py-1.5 rounded-full text-xs font-bold bg-brand-500/10 text-brand-500 border border-brand-500/20">
+                                                        {skill}
+                                                    </span>
+                                                ))}
+                                                {(sessionData.researchPlan.core_skills_to_verify || []).length === 0 && (
+                                                    <span className="text-sm text-content-tertiary italic">None recorded.</span>
+                                                )}
+                                            </div>
+                                        </div>
+                                        <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-4 shadow-md">
+                                            <h3 className="text-lg font-bold text-content-primary">Research Plan ({(sessionData.researchPlan.research_plan || []).length} items)</h3>
+                                            <div className="space-y-3">
+                                                {(sessionData.researchPlan.research_plan || []).map((item, idx) => (
+                                                    <div key={idx} className="p-4 bg-surface-primary border border-border-default rounded-xl space-y-1.5">
+                                                        <div className="flex items-start justify-between gap-3">
+                                                            <p className="text-sm font-bold text-content-primary">{item.heading}</p>
+                                                            <span className="shrink-0 px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-surface-secondary text-content-tertiary border border-border-default uppercase">{item.source}</span>
+                                                        </div>
+                                                        {item.explanation && <p className="text-xs text-content-secondary leading-relaxed">{item.explanation}</p>}
+                                                        {(item.search_queries || []).length > 0 && (
+                                                            <div className="flex flex-wrap gap-1.5 pt-1">
+                                                                {item.search_queries.map((q, qidx) => (
+                                                                    <span key={qidx} className="px-2 py-0.5 rounded-md text-[0.7rem] font-mono bg-surface-secondary text-content-secondary border border-border-default">{q}</span>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        {(sessionData.researchPlan.company_vetting?.questions || []).length > 0 && (
+                                            <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-4 shadow-md">
+                                                <h3 className="text-lg font-bold text-content-primary">Company Vetting</h3>
+                                                {(sessionData.researchPlan.company_vetting?.companies || []).length > 0 && (
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {sessionData.researchPlan.company_vetting.companies.map((c, idx) => (
+                                                            <span key={idx} className="px-3 py-1.5 rounded-full text-xs font-bold bg-surface-secondary text-content-secondary border border-border-default">{c}</span>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                <ul className="space-y-2">
+                                                    {sessionData.researchPlan.company_vetting.questions.map((q, idx) => (
+                                                        <li key={idx} className="text-sm text-content-secondary leading-relaxed flex items-start gap-2.5">
+                                                            <span className="text-brand-500 shrink-0 mt-0.5">&bull;</span>
+                                                            <span>{q}</span>
+                                                        </li>
+                                                    ))}
+                                                </ul>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Stage 2: Research findings (read-only) */}
+                        {completedTab === "research" && (
+                            <div className="space-y-4 animate-in fade-in duration-300">
+                                {!Array.isArray(sessionData.researchResults) || sessionData.researchResults.length === 0 ? (
+                                    <div className="bg-surface-card border border-border-default rounded-3xl p-8 text-center text-sm text-content-tertiary shadow-md">
+                                        No research findings were stored for this session.
+                                    </div>
+                                ) : (
+                                    (sessionData.researchResults as ResearchFinding[]).map((finding, idx) => (
+                                        <div key={idx} className="bg-surface-card border border-border-default rounded-2xl p-5 sm:p-6 space-y-2.5 shadow-md">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <h4 className="text-sm font-bold text-content-primary">{finding.heading}</h4>
+                                                <div className="flex items-center gap-2 shrink-0">
+                                                    {finding.triggered_by === "human_followup" && (
+                                                        <span className="px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-brand-500/10 text-brand-500 border border-brand-500/20">FOLLOW-UP</span>
+                                                    )}
+                                                    <span className="px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-surface-secondary text-content-tertiary border border-border-default uppercase">{finding.source}</span>
+                                                    <span className={`px-2 py-0.5 rounded-md text-[0.65rem] font-bold border uppercase ${
+                                                        finding.status === "SUCCESS"
+                                                            ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
+                                                            : "bg-amber-500/10 text-amber-600 border-amber-500/20"
+                                                    }`}>{finding.status}</span>
+                                                </div>
+                                            </div>
+                                            <p className="text-sm text-content-secondary leading-relaxed whitespace-pre-wrap">{finding.findings}</p>
+                                            {(finding.urls || []).length > 0 && (
+                                                <div className="flex flex-wrap gap-x-4 gap-y-1.5 pt-1">
+                                                    {(finding.urls || []).map((u, uidx) => {
+                                                        const url = typeof u === "string" ? u : u.url;
+                                                        const title = typeof u === "string" ? "" : u.title || "";
+                                                        if (!url) return null;
+                                                        return (
+                                                            <a key={uidx} href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-brand-500 hover:underline break-all">
+                                                                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                                                                {title || url.replace(/^https?:\/\//, "").slice(0, 50)}
+                                                            </a>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+                                    ))
+                                )}
+                            </div>
+                        )}
+
+                        {/* Stage 3: Evaluation (read-only) */}
+                        {completedTab === "evaluation" && (
+                            <div className="space-y-6 animate-in fade-in duration-300">
+                                {!sessionData.evaluation ? (
+                                    <div className="bg-surface-card border border-border-default rounded-3xl p-8 text-center text-sm text-content-tertiary shadow-md">
+                                        No evaluation data was stored for this session.
+                                    </div>
+                                ) : (
+                                    <>
+                                        {sessionData.evaluation.dimension_scores && (
+                                            <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-4 shadow-md">
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <h3 className="text-lg font-bold text-content-primary">Dimension Scores</h3>
+                                                    {typeof sessionData.evaluation.overall_fit_percentage === "number" && (
+                                                        <span className="px-3 py-1.5 rounded-full text-xs font-black bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                                                            {sessionData.evaluation.overall_fit_percentage}% fit
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="space-y-3">
+                                                    {([
+                                                        ["Skills", sessionData.evaluation.dimension_scores.skills],
+                                                        ["Experience", sessionData.evaluation.dimension_scores.experience],
+                                                        ["Project Complexity", sessionData.evaluation.dimension_scores.project_complexity],
+                                                        ["Education", sessionData.evaluation.dimension_scores.education],
+                                                        ["Public Work", sessionData.evaluation.dimension_scores.public_work],
+                                                    ] as [string, number | undefined][]).map(([label, value]) => {
+                                                        const v = typeof value === "number" ? value : 0;
+                                                        const color = v >= 75 ? "bg-emerald-500" : v >= 50 ? "bg-blue-500" : v >= 25 ? "bg-amber-500" : "bg-rose-500";
+                                                        return (
+                                                            <div key={label} className="space-y-1">
+                                                                <div className="flex justify-between text-xs font-semibold text-content-secondary">
+                                                                    <span>{label}</span>
+                                                                    <span>{v}%</span>
+                                                                </div>
+                                                                <div className="w-full h-2 bg-surface-secondary rounded-full overflow-hidden border border-border-default">
+                                                                    <div className={`h-full rounded-full transition-all duration-700 ${color}`} style={{ width: `${v}%` }} />
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-3 shadow-md">
+                                                <h3 className="text-base font-bold text-content-primary">Verified Skills</h3>
+                                                {(sessionData.evaluation.verified_skills || []).length === 0 ? (
+                                                    <p className="text-sm text-content-tertiary italic">None verified.</p>
+                                                ) : (
+                                                    <ul className="space-y-2">
+                                                        {(sessionData.evaluation.verified_skills || []).map((s, idx) => (
+                                                            <li key={idx} className="text-sm text-content-secondary flex items-start gap-2.5">
+                                                                <span className="text-emerald-500 shrink-0 mt-0.5">&bull;</span>
+                                                                <span>{s}</span>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                )}
+                                            </div>
+                                            <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-3 shadow-md">
+                                                <h3 className="text-base font-bold text-content-primary">Gaps &amp; Concerns</h3>
+                                                {(sessionData.evaluation.gaps_or_concerns || []).length === 0 ? (
+                                                    <p className="text-sm text-content-tertiary italic">No concerns recorded.</p>
+                                                ) : (
+                                                    <ul className="space-y-2">
+                                                        {(sessionData.evaluation.gaps_or_concerns || []).map((g, idx) => (
+                                                            <li key={idx} className="text-sm text-content-secondary flex items-start gap-2.5">
+                                                                <span className="text-amber-500 shrink-0 mt-0.5">&bull;</span>
+                                                                <span>{g}</span>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                )}
+                                            </div>
+                                        </div>
+                                        {(sessionData.evaluation.evidence || []).length > 0 && (
+                                            <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-4 shadow-md">
+                                                <h3 className="text-lg font-bold text-content-primary">Evidence Considered</h3>
+                                                <div className="space-y-3">
+                                                    {(sessionData.evaluation.evidence || []).map((ev, idx) => (
+                                                        <div key={idx} className="p-4 bg-surface-primary border border-border-default rounded-xl space-y-1.5">
+                                                            <div className="flex items-start justify-between gap-3">
+                                                                <p className="text-sm text-content-secondary leading-relaxed">{ev.claim}</p>
+                                                                <span className="shrink-0 px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-surface-secondary text-content-tertiary border border-border-default uppercase">{ev.source_type}</span>
+                                                            </div>
+                                                            {ev.source_url && ev.source_url !== "resume" && (
+                                                                <a href={ev.source_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-brand-500 hover:underline break-all">
+                                                                    <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                                                                    {ev.source_url.replace(/^https?:\/\//, "").slice(0, 60)}
+                                                                </a>
+                                                            )}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </>
+                                )}
+                            </div>
+                        )}
+
+                        {completedTab === "report" && (
+                        <div className="space-y-8">
                         {/* Vetting Assessment Score Card */}
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                             {/* Score Dial */}
@@ -1403,6 +1656,8 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                 </button>
                             </div>
                         </div>
+                        </div>
+                        )}
                     </div>
                 )}
 

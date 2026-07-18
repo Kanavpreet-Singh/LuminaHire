@@ -451,7 +451,12 @@ Codeforces URL: {candidate.get('codeforces_url') or "Not provided"}
 HackerRank URL: {candidate.get('hackerrank_url') or "Not provided"}
 CodeChef URL: {candidate.get('codechef_url') or "Not provided"}
 Portfolio website URL: {candidate.get('portfolio_url') or "Not provided"}
-
+{f'''
+RECRUITER PRIORITY INSTRUCTIONS FOR THIS BATCH -- weight these heavily when choosing which core
+skills to verify and when designing the research plan. Do not ignore the job description/requirements,
+but let these steer the emphasis, ordering, and which platforms/skills you prioritize verifying:
+{state['job']['recruiter_instructions']}
+''' if state['job'].get('recruiter_instructions') else ''}
 Create a highly targeted vetting plan. Be concrete.
 
 IMPORTANT constraints on sources (these are hard rules, not suggestions):
@@ -549,6 +554,13 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
     calls_made = 0
     _emit_step(state, f"🔎 Researcher: starting pass {iteration}...")
 
+    # Sources already covered by earlier passes this session (state's
+    # research_results uses an append reducer, so on evaluator-triggered
+    # follow-up passes it still holds pass 1's findings). Step 1 must skip
+    # these -- without this, every follow-up pass would re-call every URL
+    # tool and append duplicate GitHub/LeetCode/etc. findings.
+    already_covered_sources = {(r.get("source") or "").upper() for r in (state.get("research_results") or [])}
+
     # Step 1 -- deterministic, unconditional: call every platform tool for
     # which the candidate has a real, resume-extracted URL. Whether a URL
     # exists is unambiguous ground truth, not a judgment call, so this never
@@ -560,7 +572,7 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
     # when a real link is available and explicitly listed).
     for tool_name, key, label, source in tools.catalog.URL_TOOLS:
         url = candidate.get(key)
-        if not url or calls_made >= tools.catalog.MAX_TOOL_CALLS_PER_PASS:
+        if not url or source in already_covered_sources or calls_made >= tools.catalog.MAX_TOOL_CALLS_PER_PASS:
             continue
         calls_made += 1
         _emit_step(state, f"🔧 Calling {tool_name}(url={url})...")
@@ -582,13 +594,15 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
         # resume for the missing links / PDF hyperlinks) rather than leaving
         # you to guess whether a tool call failed or was skipped.
         known = [f"{label}" for name, key, label, _source in tools.catalog.URL_TOOLS if candidate.get(key)]
-        _emit_step(
-            state,
-            f"⏭️ Researcher: no known profile links on file for this candidate out of "
-            f"{len(tools.catalog.URL_TOOLS)} tracked platforms"
-            + (f" (found: {', '.join(known)})" if known else "")
-            + " -- check that the resume text/PDF hyperlinks actually contain these URLs.",
-        )
+        if known and already_covered_sources:
+            _emit_step(state, f"⏭️ Researcher: all known profile links ({', '.join(known)}) were already researched in an earlier pass -- not re-fetching.")
+        else:
+            _emit_step(
+                state,
+                f"⏭️ Researcher: no known profile links on file for this candidate out of "
+                f"{len(tools.catalog.URL_TOOLS)} tracked platforms"
+                + " -- check that the resume text/PDF hyperlinks actually contain these URLs.",
+            )
 
     # Step 2 -- LLM-judged: only the genuinely ambiguous decisions are left
     # to the model -- whether checking Medium/Scholar/arXiv is worth it (no
@@ -598,7 +612,8 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
     # DECLARATIONS) so the model can't re-select an already-handled URL tool.
     _emit_step(state, "🔎 Researcher: deciding on additional judgment-based research...")
     plan_hint = json.dumps(work_items, indent=2) if work_items else "(no specific plan items; use judgment based on the job and candidate)"
-    covered_summary = "; ".join(f"{r['source']} ({r['status']})" for r in results) or "(none yet)"
+    all_covered = list(state.get("research_results") or []) + results  # prior passes + this pass's Step 1
+    covered_summary = "; ".join(f"{r.get('source')} ({r.get('status')})" for r in all_covered) or "(none yet)"
 
     context = f"""
 You are the Researcher Agent conducting evidence-gathering research pass {iteration} on a job candidate.
@@ -609,7 +624,12 @@ Resume excerpt: {(candidate.get('resume_text') or 'N/A')[:1000]}
 
 RESEARCH GOALS from the Planner (hints on what to investigate, not literal instructions):
 {plan_hint}
-
+{f'''
+RECRUITER PRIORITY INSTRUCTIONS FOR THIS BATCH -- bias your judgment calls below (which of
+Medium/Scholar/arXiv/GitHub-topic/web-search to actually call, and what to search for) toward
+gathering evidence relevant to this:
+{state['job']['recruiter_instructions']}
+''' if state['job'].get('recruiter_instructions') else ''}
 ALREADY RESEARCHED (every platform with a known profile link/username has already been
 checked deterministically -- do not ask for these again, they are not in your tool list):
 {covered_summary}
@@ -750,6 +770,10 @@ You are the Technical Evaluator Agent — an impartial judge. Assess the candida
 Rules:
 - Only list a skill under verified_skills if a research finding (with a source URL) supports it. Resume-only claims are NOT verified.
 - Score each dimension 0-100 based on the evidence.
+{f'''- RECRUITER PRIORITY INSTRUCTIONS are provided below (see JOB DETAILS). Weight them heavily in the
+  dimension scores and the overall_fit_percentage -- treat them as the primary lens for judging fit among
+  candidates who otherwise look comparable, not merely a tiebreaker. Still score STRICTLY from cited evidence;
+  never invent or inflate evidence to satisfy the instructions.''' if state['job'].get('recruiter_instructions') else ''}
 - You MUST populate the evidence list. Whenever any research finding has a status of SUCCESS, include at least 3 evidence items, each pairing a concrete claim with a supporting source_url taken from that finding's `urls` (use source_type RESUME with source_url "resume" only for claims backed solely by the resume). Never return an empty evidence list when SUCCESS findings exist.
 - If the evidence is too thin to judge confidently AND this is not already the final allowed pass ({iteration} of {MAX_RESEARCH_ITERATIONS}), set evidence_sufficient=false and provide as many targeted additional_research_requests as are genuinely needed to close the gaps -- do not artificially limit the count. Otherwise set evidence_sufficient=true and leave additional_research_requests empty.
 
@@ -758,6 +782,7 @@ Title: {state['job']['title']}
 Description: {state['job']['description']}
 Requirements: {state['job']['requirements'] or "N/A"}
 Core skills to verify: {", ".join(core_skills) or "N/A"}
+{f"Recruiter priority instructions: {state['job']['recruiter_instructions']}" if state['job'].get('recruiter_instructions') else ""}
 
 CANDIDATE:
 Name: {state['candidate']['name']}

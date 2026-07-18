@@ -55,12 +55,13 @@ model JobPosting {
   
   // Vector embedding for semantic matching (1536 dimensions in database).
   embedding    Unsupported("vector(1536)")?
-  
+
   applications Application[]
-  
+  batches      VettingBatch[]
+
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
-  
+
   @@map("job_postings")
 }
 
@@ -155,10 +156,62 @@ model VettingSession {
   // Logs of the agent session (JSON array of strings)
   logs          Json?
 
+  // Batch "Hiring Committee" membership. A session created by a batch run
+  // points here; single-candidate sessions leave it null.
+  batchId       String?
+  batch         VettingBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  // 1..N once the owning batch is finalized and this session was a winner;
+  // null otherwise (not selected, batch not finalized, or not a batch run).
+  batchRank     Int?
+  // Denormalized copy of the batch's recruiter instructions, set at creation,
+  // so restart/resume routes can rebuild the Python job payload without a join.
+  recruiterInstructions String? @db.Text
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   @@map("vetting_sessions")
+}
+
+model VettingBatch {
+  id                    String   @id @default(cuid())
+
+  jobId                 String
+  job                   JobPosting @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  // Denormalized for cheap ownership checks on the batch status route.
+  recruiterId           String
+
+  targetHireCount       Int                 // "N" -- how many to hire
+  matchThreshold        Float               // calibrated 0-100 semantic cutoff (default 50)
+  recruiterInstructions String?  @db.Text   // free-text priority instructions, obeyed by all 3 agents
+
+  status                VettingBatchStatus @default(DISPATCHING)
+
+  poolSize              Int      @default(0) // candidates over threshold, capped by pool cap
+  dispatchedCount       Int      @default(0) // new sessions created + dispatched
+  skippedCount          Int      @default(0) // pre-existing non-terminal sessions left mid-flight
+
+  // Ordered array of winning VettingSession ids (rank 1..N). Written exactly
+  // once by the finalizer; mirror of VettingSession.batchRank for a cheap read.
+  topSessionIds         Json?
+
+  finalizedAt           DateTime?
+  errorMessage          String?  @db.Text
+
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  sessions              VettingSession[]
+
+  @@map("vetting_batches")
+}
+
+enum VettingBatchStatus {
+  DISPATCHING
+  RUNNING
+  COMPLETED
+  FAILED
 }
 
 enum VettingSessionStatus {

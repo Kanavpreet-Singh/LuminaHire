@@ -55,6 +55,12 @@ export async function syncCompletedResults(
             logs: combinedLogs,
             // Backfill the plan for committee runs that started without one.
             ...(python.planner_output ? { researchPlan: python.planner_output } : {}),
+            // Persist the evaluator's raw output too: non-HITL (committee) runs
+            // never pause at AWAITING_EVALUATION_APPROVAL (the only other sync
+            // that records it), and the completed session's stage-by-stage
+            // review needs it. HITL runs pass evaluation: null here, keeping
+            // whatever the earlier pause already persisted.
+            ...(python.evaluation ? { evaluation: python.evaluation } : {}),
         },
     });
 
@@ -133,6 +139,7 @@ type SessionWithApp = {
     status: string;
     logs: unknown;
     researchPlan: unknown;
+    batchId?: string | null;
 };
 
 /**
@@ -175,10 +182,12 @@ export async function pollThroughPython<T extends SessionWithApp>(session: T): P
 
     if (python.phase === "COMPLETED") {
         await syncCompletedResults(session.id, session.applicationId, session.logs, python);
+        if (session.batchId) await maybeFinalizeBatch(session.batchId);
         return refetch(session);
     }
     if (python.phase === "FAILED") {
         await failSession(session.id, session.logs, python.error || "Pipeline failed.");
+        if (session.batchId) await maybeFinalizeBatch(session.batchId);
         return refetch(session);
     }
     if (python.phase === "AWAITING_RESEARCH_INPUT") {
@@ -223,4 +232,59 @@ async function refetch<T extends SessionWithApp>(session: T): Promise<T> {
         include: { application: { include: { candidate: true, job: true } } },
     });
     return (fresh as unknown as T) ?? session;
+}
+
+/**
+ * Finalize a batch once ALL its member sessions are terminal (COMPLETED/FAILED).
+ * Ranks COMPLETED members by their pipeline's own overall_fit_percentage,
+ * marks the top-N as winners (batchRank 1..N + Application AI_SHORTLISTED), and
+ * flips the batch to COMPLETED. Idempotent: uses the same status-guarded
+ * updateMany lock idiom as syncCompletedResults, so concurrent pollers can't
+ * double-finalize -- only the writer that flips DISPATCHING/RUNNING -> COMPLETED
+ * proceeds to write ranks. Safe to call unconditionally; a no-op if the batch
+ * is already terminal or any member is still running.
+ */
+export async function maybeFinalizeBatch(batchId: string): Promise<void> {
+    const members = await prisma.vettingSession.findMany({ where: { batchId } });
+    if (members.length === 0) return;
+
+    // Batch members are always AUTONOMOUS: they never pause at AWAITING_*, so
+    // "all terminal" is exactly COMPLETED | FAILED for every member.
+    const allTerminal = members.every((m) => m.status === "COMPLETED" || m.status === "FAILED");
+    if (!allTerminal) return;
+
+    const batch = await prisma.vettingBatch.findUnique({ where: { id: batchId } });
+    if (!batch || batch.status === "COMPLETED" || batch.status === "FAILED") return;
+
+    const fit = (m: (typeof members)[number]): number | null => {
+        const v = (m.finalReport as any)?.overall_fit_percentage;
+        return typeof v === "number" ? v : null;
+    };
+    const ranked = members
+        .filter((m) => m.status === "COMPLETED" && fit(m) !== null)
+        .sort((a, b) => (fit(b) as number) - (fit(a) as number));
+    const top = ranked.slice(0, batch.targetHireCount);
+
+    // Idempotency lock: only the caller that flips the batch terminal proceeds.
+    const claim = await prisma.vettingBatch.updateMany({
+        where: { id: batchId, status: { in: ["DISPATCHING", "RUNNING"] } },
+        data: {
+            status: "COMPLETED",
+            finalizedAt: new Date(),
+            topSessionIds: top.map((s) => s.id),
+        },
+    });
+    if (claim.count !== 1) return; // another poller already finalized it
+
+    if (top.length > 0) {
+        await prisma.$transaction(
+            top.map((s, i) =>
+                prisma.vettingSession.update({ where: { id: s.id }, data: { batchRank: i + 1 } })
+            )
+        );
+        await prisma.application.updateMany({
+            where: { id: { in: top.map((s) => s.applicationId) } },
+            data: { status: "AI_SHORTLISTED" },
+        });
+    }
 }

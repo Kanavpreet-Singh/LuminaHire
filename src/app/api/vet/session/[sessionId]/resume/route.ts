@@ -58,6 +58,7 @@ export async function POST(
                     title: vettingSession.application.job.title,
                     description: vettingSession.application.job.description,
                     requirements: vettingSession.application.job.requirements,
+                    recruiter_instructions: vettingSession.recruiterInstructions,
                 },
                 candidate: {
                     name: vettingSession.application.candidate.name,

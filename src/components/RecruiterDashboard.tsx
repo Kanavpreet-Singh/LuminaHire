@@ -69,6 +69,48 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
     const [expandedCandidateId, setExpandedCandidateId] = useState<string | null>(null);
     const [initiatingVetId, setInitiatingVetId] = useState<string | null>(null);
 
+    // Batch "Hiring Committee" trigger state
+    const [batchOpen, setBatchOpen] = useState(false);
+    const [batchN, setBatchN] = useState<number>(3);
+    const [batchThreshold, setBatchThreshold] = useState<number>(50);
+    const [batchInstructions, setBatchInstructions] = useState("");
+    const [launchingBatch, setLaunchingBatch] = useState(false);
+    const [batchError, setBatchError] = useState("");
+    const [existingBatchId, setExistingBatchId] = useState<string | null>(null);
+
+    const handleLaunchBatch = async () => {
+        if (!selectedJob) return;
+        setLaunchingBatch(true);
+        setBatchError("");
+        setExistingBatchId(null);
+        try {
+            const res = await fetch("/api/vet/batch", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    jobId: selectedJob.id,
+                    targetHireCount: batchN,
+                    matchThreshold: batchThreshold,
+                    recruiterInstructions: batchInstructions.trim() || undefined,
+                }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 409) {
+                setExistingBatchId(data.existingBatchId || null);
+                setBatchError("A batch is already running for this job.");
+                return;
+            }
+            if (!res.ok) {
+                throw new Error(data.error || "Failed to launch batch");
+            }
+            window.location.href = `/vetting/batch/${data.batchId}`;
+        } catch (err: any) {
+            setBatchError(err.message || "Something went wrong launching the batch.");
+        } finally {
+            setLaunchingBatch(false);
+        }
+    };
+
     const handleInitiateVetting = async (candidateId: string, jobId: string) => {
         setInitiatingVetId(candidateId);
         try {
@@ -226,6 +268,10 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
         return true;
     });
 
+    // Candidates that would enter a batch at the current threshold (mirrors the
+    // Python-side pre-filter: matchScore > batchThreshold).
+    const batchPoolCount = matches.filter((m) => (m.matchScore ?? 0) > batchThreshold).length;
+
     return (
         <div className="space-y-10 relative z-10">
             {/* Header & Personal Details */}
@@ -245,7 +291,10 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
                         </div>
                     </div>
                 </div>
-                <div className="flex gap-3 w-full lg:w-auto shrink-0">
+                <div className="flex flex-wrap gap-3 w-full lg:w-auto shrink-0">
+                    <Link href="/vetting" className="flex-1 lg:flex-none text-center px-5 sm:px-6 py-3 bg-surface-tertiary hover:bg-surface-secondary text-content-secondary border border-border-default rounded-xl font-bold transition-all shadow-sm text-sm sm:text-base whitespace-nowrap">
+                        Vetting History
+                    </Link>
                     <Link href="/profile" className="flex-1 lg:flex-none text-center px-5 sm:px-6 py-3 bg-surface-tertiary hover:bg-surface-secondary text-content-secondary border border-border-default rounded-xl font-bold transition-all shadow-sm text-sm sm:text-base whitespace-nowrap">
                         Edit Profile
                     </Link>
@@ -396,6 +445,91 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
                                     className="w-full sm:w-32 accent-brand-500 cursor-pointer"
                                 />
                             </div>
+                        </div>
+
+                        {/* Batch "Hiring Committee" trigger */}
+                        <div className="px-6 pt-5 pb-1 border-b border-border-default bg-surface-card/40 shrink-0">
+                            <button
+                                onClick={() => setBatchOpen((o) => !o)}
+                                className="w-full flex items-center justify-between gap-3 text-left group cursor-pointer"
+                            >
+                                <div className="flex items-center gap-2.5">
+                                    <div className="w-8 h-8 rounded-lg bg-[image:var(--gradient-primary)] flex items-center justify-center text-white shrink-0">
+                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                                    </div>
+                                    <div>
+                                        <h3 className="text-sm font-extrabold text-content-primary">Run Hiring Committee (Batch)</h3>
+                                        <p className="text-[0.7rem] text-content-tertiary">Auto-vet the whole shortlist, rank the top-N by AI fit score.</p>
+                                    </div>
+                                </div>
+                                <svg className={`w-5 h-5 text-content-tertiary transition-transform ${batchOpen ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                            </button>
+
+                            {batchOpen && (
+                                <div className="mt-4 pb-4 space-y-4 animate-in fade-in slide-in-from-top-1 duration-200">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                        <div className="space-y-1.5">
+                                            <label className="text-xs font-bold text-content-secondary">Target hires (N)</label>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={10}
+                                                value={batchN}
+                                                onChange={(e) => setBatchN(Math.max(1, Math.min(10, Number(e.target.value) || 1)))}
+                                                className="w-full px-3 py-2 text-sm bg-surface-primary border border-border-default rounded-xl outline-none focus:border-brand-500 transition-all text-content-primary"
+                                            />
+                                        </div>
+                                        <div className="space-y-1.5">
+                                            <label className="text-xs font-bold text-content-secondary">Min similarity: {batchThreshold}%</label>
+                                            <input
+                                                type="range"
+                                                min={0}
+                                                max={95}
+                                                step={5}
+                                                value={batchThreshold}
+                                                onChange={(e) => setBatchThreshold(Number(e.target.value))}
+                                                className="w-full accent-brand-500 cursor-pointer mt-2"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-1.5">
+                                        <label className="text-xs font-bold text-content-secondary">Priority instructions (optional)</label>
+                                        <textarea
+                                            value={batchInstructions}
+                                            onChange={(e) => setBatchInstructions(e.target.value)}
+                                            rows={2}
+                                            placeholder="e.g. we focus a lot on LeetCode ratings and problems solved"
+                                            className="w-full px-3 py-2 text-sm bg-surface-primary border border-border-default rounded-xl outline-none focus:border-brand-500 transition-all text-content-primary placeholder:text-content-tertiary resize-none"
+                                        />
+                                        <p className="text-[0.7rem] text-content-tertiary">Obeyed by the planner, researcher, and evaluator when scoring every candidate.</p>
+                                    </div>
+
+                                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                                        <p className="text-xs text-content-secondary">
+                                            <span className="font-bold text-brand-500">{Math.min(batchPoolCount, 20)}</span> candidate{batchPoolCount === 1 ? "" : "s"} above {batchThreshold}% will be vetted
+                                            {batchPoolCount > 20 && <span className="text-content-tertiary"> (capped at 20)</span>}.
+                                        </p>
+                                        <button
+                                            onClick={handleLaunchBatch}
+                                            disabled={launchingBatch || batchPoolCount === 0}
+                                            className="px-5 py-2.5 bg-[image:var(--gradient-primary)] hover:opacity-95 text-white rounded-xl text-sm font-bold transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 whitespace-nowrap"
+                                        >
+                                            {launchingBatch && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
+                                            {launchingBatch ? "Launching..." : "Launch Hiring Committee"}
+                                        </button>
+                                    </div>
+
+                                    {batchError && (
+                                        <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-semibold flex items-center justify-between gap-2">
+                                            <span>{batchError}</span>
+                                            {existingBatchId && (
+                                                <Link href={`/vetting/batch/${existingBatchId}`} className="underline whitespace-nowrap">View running batch</Link>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                         {/* Candidates List */}

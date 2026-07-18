@@ -197,8 +197,12 @@ def set_awaiting_evaluation(session_id: str, *, evaluation: Any, research_result
 
 
 def set_results(session_id: str, *, final_report: Any, research_results: Any,
-                logs: List[str], research_iterations: int, planner_output: Any = None) -> None:
-    """Mark a run COMPLETED with its final payload."""
+                logs: List[str], research_iterations: int, planner_output: Any = None,
+                evaluation: Any = None) -> None:
+    """Mark a run COMPLETED with its final payload. evaluation is included so
+    non-HITL (committee) runs -- which never pause at AWAITING_EVALUATION_APPROVAL,
+    the only other place it gets recorded -- still expose the evaluator's raw
+    output for the completed session's stage-by-stage review."""
     with _lock:
         e = _tasks.get(session_id)
         if e is None:
@@ -210,6 +214,8 @@ def set_results(session_id: str, *, final_report: Any, research_results: Any,
         e["research_iterations"] = research_iterations
         if planner_output is not None:
             e["planner_output"] = planner_output
+        if evaluation is not None:
+            e["evaluation"] = evaluation
         e["error"] = None
         e["updated_at"] = _now()
 

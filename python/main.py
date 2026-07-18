@@ -387,6 +387,10 @@ class JobInput(BaseModel):
     title: str
     description: str
     requirements: str | None = None
+    # Batch "Hiring Committee" priority instructions (free text). Absent/None
+    # for single-candidate runs -- every agent prompt renders its instruction
+    # block empty when this is falsy, so the existing flow is unchanged.
+    recruiter_instructions: str | None = None
 
 class CandidateInput(BaseModel):
     name: str
@@ -461,7 +465,12 @@ class VetQARequest(BaseModel):
 
 
 def _job_dict(job: JobInput) -> dict:
-    return {"title": job.title, "description": job.description, "requirements": job.requirements}
+    return {
+        "title": job.title,
+        "description": job.description,
+        "requirements": job.requirements,
+        "recruiter_instructions": job.recruiter_instructions,
+    }
 
 def _candidate_dict(c: CandidateInput) -> dict:
     """
@@ -612,6 +621,7 @@ def _run_pipeline(session_id: str, job: dict, candidate: dict, planner_output,
                     logs=final.get("logs", []),
                     research_iterations=final.get("research_iterations", 0),
                     planner_output=planner_output,
+                    evaluation=final.get("evaluation"),
                 )
             elif final.get("evaluation") is not None:
                 registry.set_awaiting_evaluation(
@@ -657,6 +667,7 @@ def _run_report_stage(session_id: str, job: dict, candidate: dict, planner_outpu
                 logs=result.get("logs", []),
                 research_iterations=research_iterations,
                 planner_output=planner_output,
+                evaluation=evaluation,
             )
         except Exception as e:
             traceback.print_exc()
