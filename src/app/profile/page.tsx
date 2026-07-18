@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { UploadDropzone } from "@/utils/uploadthing";
 import "@uploadthing/react/styles.css";
 
@@ -23,6 +24,10 @@ export default function ProfilePage() {
     const [initialResumeUrl, setInitialResumeUrl] = useState<string | null>(null);
     const [phone, setPhone] = useState("");
     const [initialPhone, setInitialPhone] = useState("");
+    const [linkedinUrl, setLinkedinUrl] = useState("");
+    const [initialLinkedinUrl, setInitialLinkedinUrl] = useState("");
+    const [githubUrl, setGithubUrl] = useState("");
+    const [initialGithubUrl, setInitialGithubUrl] = useState("");
     
     const [isRecruiter, setIsRecruiter] = useState(false);
     const [feedback, setFeedback] = useState<{
@@ -32,7 +37,7 @@ export default function ProfilePage() {
 
     const hasChanges = isRecruiter
         ? name !== initialName || companyName !== initialCompanyName
-        : phone !== initialPhone || resumeUrl !== initialResumeUrl;
+        : phone !== initialPhone || resumeUrl !== initialResumeUrl || linkedinUrl !== initialLinkedinUrl || githubUrl !== initialGithubUrl;
 
     const resumeFileName = (() => {
         if (!resumeUrl) return null;
@@ -79,8 +84,12 @@ export default function ProfilePage() {
             if (data.candidate) {
                 setPhone(data.candidate.phone || "");
                 setResumeUrl(data.candidate.resumeUrl || null);
+                setLinkedinUrl(data.candidate.linkedinUrl || "");
+                setGithubUrl(data.candidate.githubUrl || "");
                 setInitialPhone(data.candidate.phone || "");
                 setInitialResumeUrl(data.candidate.resumeUrl || null);
+                setInitialLinkedinUrl(data.candidate.linkedinUrl || "");
+                setInitialGithubUrl(data.candidate.githubUrl || "");
             }
         } catch (error) {
             console.error("Failed to fetch profile", error);
@@ -98,10 +107,39 @@ export default function ProfilePage() {
         setSaving(true);
         setFeedback(null);
 
+        // Basic client-side URL validation
+        if (linkedinUrl) {
+            const cleanUrl = linkedinUrl.trim();
+            if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+                setFeedback({ type: "error", message: "LinkedIn Profile URL must start with http:// or https://" });
+                setSaving(false);
+                return;
+            }
+            if (!cleanUrl.toLowerCase().includes("linkedin.com")) {
+                setFeedback({ type: "error", message: "LinkedIn Profile URL must contain linkedin.com" });
+                setSaving(false);
+                return;
+            }
+        }
+
+        if (githubUrl) {
+            const cleanUrl = githubUrl.trim();
+            if (!cleanUrl.startsWith("http://") && !cleanUrl.startsWith("https://")) {
+                setFeedback({ type: "error", message: "GitHub Profile URL must start with http:// or https://" });
+                setSaving(false);
+                return;
+            }
+            if (!cleanUrl.toLowerCase().includes("github.com")) {
+                setFeedback({ type: "error", message: "GitHub Profile URL must contain github.com" });
+                setSaving(false);
+                return;
+            }
+        }
+
         try {
             const body = isRecruiter 
                 ? { name, companyName }
-                : { resumeUrl, phone };
+                : { resumeUrl, phone, linkedinUrl, githubUrl };
 
             const res = await fetch("/api/profile", {
                 method: "POST",
@@ -122,6 +160,8 @@ export default function ProfilePage() {
                 } else {
                     setInitialPhone(phone);
                     setInitialResumeUrl(resumeUrl);
+                    setInitialLinkedinUrl(linkedinUrl);
+                    setInitialGithubUrl(githubUrl);
 
                     if (data.embedding?.status === "failed") {
                         const rawError = data.embedding.error || "";
@@ -146,9 +186,10 @@ export default function ProfilePage() {
                     }
                 }
             } else {
+                const errMsg = await res.text();
                 setFeedback({
                     type: "error",
-                    message: "Failed to update profile. Please try again.",
+                    message: errMsg || "Failed to update profile. Please try again.",
                 });
             }
         } catch (error) {
@@ -179,6 +220,19 @@ export default function ProfilePage() {
             </div>
 
             <div className="max-w-xl w-full relative z-10">
+                <div className="mb-6 flex justify-start">
+                    <Link
+                        href={isRecruiter ? "/dashboard" : "/jobs"}
+                        className="inline-flex items-center gap-2 px-4 py-2 bg-surface-tertiary hover:bg-surface-secondary text-content-secondary border border-border-default rounded-xl font-bold transition-all shadow-sm text-sm no-underline"
+                    >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="19" y1="12" x2="5" y2="12" />
+                            <polyline points="12 19 5 12 12 5" />
+                        </svg>
+                        {isRecruiter ? "Back to Dashboard" : "Back to Jobs"}
+                    </Link>
+                </div>
+
                 <div className="text-center mb-10">
                     <h1 className="text-3xl md:text-5xl font-bold text-content-primary font-display mb-4">
                         My <span className="gradient-text">Profile</span>
@@ -274,6 +328,36 @@ export default function ProfilePage() {
                                         value={phone}
                                         onChange={(e) => {
                                             setPhone(e.target.value);
+                                            if (feedback) setFeedback(null);
+                                        }}
+                                    />
+                                </div>
+
+                                <div className="flex flex-col gap-2">
+                                    <label htmlFor="linkedinUrl" className="text-[0.85rem] font-semibold text-content-secondary">LinkedIn Profile URL</label>
+                                    <input
+                                        id="linkedinUrl"
+                                        type="url"
+                                        className="form-input-light w-full py-3 px-4 rounded-xl border border-border-default bg-surface-secondary text-content-primary text-[0.9rem] font-[var(--font-sans)] transition-all duration-200 outline-none focus:border-brand-500"
+                                        placeholder="https://linkedin.com/in/username"
+                                        value={linkedinUrl}
+                                        onChange={(e) => {
+                                            setLinkedinUrl(e.target.value);
+                                            if (feedback) setFeedback(null);
+                                        }}
+                                    />
+                                </div>
+
+                                <div className="flex flex-col gap-2">
+                                    <label htmlFor="githubUrl" className="text-[0.85rem] font-semibold text-content-secondary">GitHub Profile URL</label>
+                                    <input
+                                        id="githubUrl"
+                                        type="url"
+                                        className="form-input-light w-full py-3 px-4 rounded-xl border border-border-default bg-surface-secondary text-content-primary text-[0.9rem] font-[var(--font-sans)] transition-all duration-200 outline-none focus:border-brand-500"
+                                        placeholder="https://github.com/username"
+                                        value={githubUrl}
+                                        onChange={(e) => {
+                                            setGithubUrl(e.target.value);
                                             if (feedback) setFeedback(null);
                                         }}
                                     />
@@ -376,7 +460,7 @@ export default function ProfilePage() {
 
                         <button
                             type="submit"
-                            className="w-full py-3.5 mt-4 rounded-xl text-[0.95rem] font-bold text-white bg-[image:var(--gradient-primary)] border-none cursor-pointer transition-all duration-300 shadow-glow hover:not-disabled:-translate-y-px hover:not-disabled:shadow-glow-strong disabled:opacity-50 disabled:grayscale disabled:cursor-not-allowed flex justify-center items-center"
+                            className="w-full py-3.5 mt-4 rounded-xl text-[0.95rem] font-bold text-white bg-[image:var(--gradient-primary)] border-none cursor-pointer transition-all duration-300 shadow-glow hover:not-disabled:-translate-y-px hover:not-disabled:shadow-glow-strong active:not-disabled:scale-[0.98] disabled:opacity-50 disabled:grayscale disabled:cursor-not-allowed flex justify-center items-center"
                             disabled={saving || !hasChanges}
                         >
                             {saving

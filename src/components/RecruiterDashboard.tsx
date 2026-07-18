@@ -30,6 +30,9 @@ interface CandidateMatch {
     resumeUrl: string | null;
     resumeText: string | null;
     matchScore: number | null;
+    applicationId: string | null;
+    sessionId: string | null;
+    sessionStatus: string | null;
 }
 
 interface RecruiterDashboardProps {
@@ -61,9 +64,31 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
     const [deleteError, setDeleteError] = useState("");
 
     // Filters & Search
-    const [minScore, setMinScore] = useState<number>(0);
+    const [minScore, setMinScore] = useState<number>(20);
     const [candidateSearch, setCandidateSearch] = useState("");
     const [expandedCandidateId, setExpandedCandidateId] = useState<string | null>(null);
+    const [initiatingVetId, setInitiatingVetId] = useState<string | null>(null);
+
+    const handleInitiateVetting = async (candidateId: string, jobId: string) => {
+        setInitiatingVetId(candidateId);
+        try {
+            const res = await fetch("/api/vet/initiate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ candidateId, jobId })
+            });
+            if (!res.ok) {
+                throw new Error(await res.text() || "Failed to initiate vetting");
+            }
+            const data = await res.json();
+            // Redirect to vetting session page
+            window.location.href = `/vetting/${data.vettingSession.id}`;
+        } catch (err: any) {
+            alert(err.message || "Something went wrong initiating the vetting session.");
+        } finally {
+            setInitiatingVetId(null);
+        }
+    };
 
     const startEditing = (job: JobPosting) => {
         setEditingJob(job);
@@ -187,6 +212,7 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
     // Filter and search matches
     const filteredMatches = matches.filter(match => {
         const score = match.matchScore ?? 0;
+        if (score <= 0) return false; // Exclude completely unrelated candidates (0% match)
         if (score < minScore) return false;
         
         if (candidateSearch.trim()) {
@@ -271,8 +297,12 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
                     </div>
                 ) : (
                     <div className="space-y-4">
-                        {jobs.map((job) => (
-                            <div key={job.id} className="group flex flex-col lg:flex-row lg:items-center justify-between p-6 bg-surface-primary border border-border-default rounded-2xl hover:border-brand-500 transition-all duration-200">
+                        {jobs.map((job, idx) => (
+                            <div
+                                key={job.id}
+                                className="group flex flex-col lg:flex-row lg:items-center justify-between p-6 bg-surface-primary border border-border-default rounded-2xl hover:border-brand-500 transition-all duration-200 animate-fadeInUp"
+                                style={{ animationDelay: `${Math.min(idx * 0.05, 0.3)}s` }}
+                            >
                                 <div className="space-y-1">
                                     <h3 className="text-xl font-bold text-content-primary group-hover:text-brand-500 transition-colors">
                                         {job.title}
@@ -387,14 +417,15 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
                                 </div>
                             ) : (
                                 <div className="space-y-4">
-                                    {filteredMatches.map((match) => {
+                                    {filteredMatches.map((match, idx) => {
                                         const isExpanded = expandedCandidateId === match.id;
                                         const score = match.matchScore ?? 0;
-                                        
+
                                         return (
-                                            <div 
+                                            <div
                                                 key={match.id}
-                                                className={`border rounded-2xl transition-all duration-200 overflow-hidden ${isExpanded ? "border-brand-500 bg-surface-card/45 shadow-lg" : "border-border-default bg-surface-card hover:border-brand-500/50"}`}
+                                                className={`border rounded-2xl transition-all duration-200 overflow-hidden animate-fadeInUp ${isExpanded ? "border-brand-500 bg-surface-card/45 shadow-lg" : "border-border-default bg-surface-card hover:border-brand-500/50"}`}
+                                                style={{ animationDelay: `${Math.min(idx * 0.04, 0.24)}s` }}
                                             >
                                                 {/* Summary card */}
                                                 <div 
@@ -475,21 +506,71 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
 
 
                                                         {/* Resume buttons */}
-                                                        <div className="flex items-center justify-between gap-3 pt-2">
+                                                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-2">
                                                             <span className="text-[0.7rem] text-content-tertiary">Calculated using Gemini embedding values</span>
-                                                            {match.resumeUrl ? (
-                                                                <a 
-                                                                    href={match.resumeUrl}
-                                                                    target="_blank"
-                                                                    rel="noreferrer"
-                                                                    className="px-4 py-2 bg-surface-tertiary hover:bg-surface-secondary text-content-secondary border border-border-default rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 no-underline"
-                                                                >
-                                                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                                                                    Open Resume PDF
-                                                                </a>
-                                                            ) : (
-                                                                <span className="text-xs font-bold text-content-tertiary">No PDF URL available</span>
-                                                            )}
+                                                            <div className="flex flex-wrap items-center gap-2">
+                                                                {match.resumeUrl && (
+                                                                    <a 
+                                                                        href={match.resumeUrl}
+                                                                        target="_blank"
+                                                                        rel="noreferrer"
+                                                                        className="px-4 py-2 bg-surface-tertiary hover:bg-surface-secondary text-content-secondary border border-border-default rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 no-underline"
+                                                                    >
+                                                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+                                                                        Open Resume PDF
+                                                                    </a>
+                                                                )}
+                                                                {match.sessionId ? (
+                                                                    match.sessionStatus === "PLANNING" ? (
+                                                                        <Link 
+                                                                            href={`/vetting/${match.sessionId}`}
+                                                                            className="px-4 py-2 bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20 hover:bg-amber-500 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 no-underline"
+                                                                        >
+                                                                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                                                                            Edit Recruit Plan
+                                                                        </Link>
+                                                                    ) : match.sessionStatus === "RESEARCHING" ? (
+                                                                        <div className="px-4 py-2 bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5">
+                                                                            <div className="w-3 h-3 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                                                                            Agent Recruiting...
+                                                                        </div>
+                                                                    ) : match.sessionStatus === "COMPLETED" ? (
+                                                                        <Link 
+                                                                            href={`/vetting/${match.sessionId}`}
+                                                                            className="px-4 py-2 bg-emerald-500 text-white hover:bg-emerald-600 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 no-underline shadow-sm"
+                                                                        >
+                                                                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path></svg>
+                                                                            View Recruit Report
+                                                                        </Link>
+                                                                    ) : (
+                                                                        <button 
+                                                                            onClick={() => handleInitiateVetting(match.id, selectedJob.id)}
+                                                                            disabled={initiatingVetId !== null}
+                                                                            className="px-4 py-2 bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/20 hover:bg-rose-500 hover:text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                                                                        >
+                                                                            {initiatingVetId === match.id ? (
+                                                                                <div className="w-3 h-3 border-2 border-rose-500 border-t-transparent rounded-full animate-spin shrink-0" />
+                                                                            ) : (
+                                                                                <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"></path><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3v5h5"></path></svg>
+                                                                            )}
+                                                                            Retry Recruit
+                                                                        </button>
+                                                                    )
+                                                                ) : (
+                                                                    <button 
+                                                                        onClick={() => handleInitiateVetting(match.id, selectedJob.id)}
+                                                                        disabled={initiatingVetId !== null}
+                                                                        className="px-4 py-2 bg-[image:var(--gradient-primary)] hover:opacity-95 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-md hover:-translate-y-0.5 cursor-pointer disabled:opacity-50"
+                                                                    >
+                                                                        {initiatingVetId === match.id ? (
+                                                                            <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                                                        ) : (
+                                                                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                                                                        )}
+                                                                        Agent Recruit
+                                                                    </button>
+                                                                )}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 )}
@@ -590,18 +671,18 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
                         </div>
 
                         {/* Footer */}
-                        <div className="p-6 border-t border-border-default bg-surface-card flex justify-end gap-3 shrink-0">
-                            <button 
+                        <div className="p-6 border-t border-border-default bg-surface-card flex flex-col-reverse sm:flex-row justify-end gap-3 shrink-0">
+                            <button
                                 onClick={() => setEditingJob(null)}
                                 disabled={savingEdit}
-                                className="px-5 py-2.5 bg-surface-tertiary hover:bg-surface-secondary text-content-secondary border border-border-default font-bold rounded-xl text-sm transition-all cursor-pointer disabled:opacity-50"
+                                className="px-5 py-2.5 bg-surface-tertiary hover:bg-surface-secondary active:not-disabled:scale-[0.98] text-content-secondary border border-border-default font-bold rounded-xl text-sm transition-all cursor-pointer disabled:opacity-50"
                             >
                                 Cancel
                             </button>
-                            <button 
+                            <button
                                 onClick={handleSaveEdit}
                                 disabled={savingEdit}
-                                className="px-6 py-2.5 bg-[image:var(--gradient-primary)] hover:opacity-95 text-white font-bold rounded-xl text-sm transition-all shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                                className="px-6 py-2.5 bg-[image:var(--gradient-primary)] hover:opacity-95 active:not-disabled:scale-[0.98] text-white font-bold rounded-xl text-sm transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                             >
                                 {savingEdit && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
                                 {savingEdit ? "Updating Embeddings..." : "Save Changes"}
@@ -646,18 +727,18 @@ export default function RecruiterDashboard({ initialUser, initialJobs }: Recruit
                         </div>
 
                         {/* Footer */}
-                        <div className="p-6 border-t border-border-default bg-surface-card flex justify-end gap-3 shrink-0">
-                            <button 
+                        <div className="p-6 border-t border-border-default bg-surface-card flex flex-col-reverse sm:flex-row justify-end gap-3 shrink-0">
+                            <button
                                 onClick={() => setDeletingJob(null)}
                                 disabled={deletingJobLoading}
-                                className="px-5 py-2.5 bg-surface-tertiary hover:bg-surface-secondary text-content-secondary border border-border-default font-bold rounded-xl text-sm transition-all cursor-pointer disabled:opacity-50"
+                                className="px-5 py-2.5 bg-surface-tertiary hover:bg-surface-secondary active:not-disabled:scale-[0.98] text-content-secondary border border-border-default font-bold rounded-xl text-sm transition-all cursor-pointer disabled:opacity-50"
                             >
                                 Cancel
                             </button>
-                            <button 
+                            <button
                                 onClick={handleConfirmDelete}
                                 disabled={deletingJobLoading}
-                                className="px-6 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-sm transition-all shadow-md flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                                className="px-6 py-2.5 bg-rose-600 hover:bg-rose-700 active:not-disabled:scale-[0.98] text-white font-bold rounded-xl text-sm transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
                             >
                                 {deletingJobLoading && <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />}
                                 Delete Posting

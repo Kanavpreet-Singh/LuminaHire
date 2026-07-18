@@ -7,7 +7,7 @@ import Link from "next/link";
 
 export default function RegisterPage() {
     const router = useRouter();
-    const { status } = useSession();
+    const { data: session, status } = useSession();
     const [name, setName] = useState("");
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
@@ -21,9 +21,10 @@ export default function RegisterPage() {
 
     useEffect(() => {
         if (status === "authenticated") {
-            router.replace("/");
+            const existingRole = (session?.user as any)?.role;
+            router.replace(existingRole === "RECRUITER" ? "/dashboard" : "/jobs");
         }
-    }, [status, router]);
+    }, [status, session, router]);
 
     if (status === "authenticated") return null;
 
@@ -72,7 +73,7 @@ export default function RegisterPage() {
             if (result?.error) {
                 router.push("/login");
             } else {
-                router.push("/");
+                router.push(role === "RECRUITER" ? "/dashboard" : "/jobs");
                 router.refresh();
             }
         } catch {
@@ -116,7 +117,7 @@ export default function RegisterPage() {
                         </div>
                     </Link>
                     <h1 className="text-2xl font-bold mb-2 text-content-primary font-display">Create your account</h1>
-                    <p className="text-[0.9rem] text-content-secondary">Start documenting your technical decisions with AI</p>
+                    <p className="text-[0.9rem] text-content-secondary">Join LuminaHire to streamline your hiring, powered by agentic AI</p>
                 </div>
 
                 {/* Google Sign-Up */}
@@ -263,7 +264,7 @@ export default function RegisterPage() {
 
                     <button
                         type="submit"
-                        className="w-full py-3 rounded-md text-[0.95rem] font-semibold text-white bg-[image:var(--gradient-primary)] border-none cursor-pointer transition-all duration-300 shadow-glow font-[var(--font-sans)] hover:not-disabled:-translate-y-px hover:not-disabled:shadow-glow-strong disabled:opacity-60 disabled:cursor-not-allowed"
+                        className="w-full py-3 rounded-md text-[0.95rem] font-semibold text-white bg-[image:var(--gradient-primary)] border-none cursor-pointer transition-all duration-300 shadow-glow font-[var(--font-sans)] hover:not-disabled:-translate-y-px hover:not-disabled:shadow-glow-strong active:not-disabled:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
                         disabled={loading}
                     >
                         {loading ? "Creating account..." : "Create Account"}

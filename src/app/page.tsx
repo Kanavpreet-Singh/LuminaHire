@@ -35,6 +35,29 @@ function useAnimatedCounter(target: number, duration: number = 2000, suffix: str
   return { ref, display: `${count.toLocaleString()}${suffix}` };
 }
 
+/* ────────── Scroll Reveal Hook ────────── */
+function useReveal<T extends HTMLElement>(threshold: number = 0.15) {
+  const ref = useRef<T>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) { setVisible(true); obs.disconnect(); } },
+      { threshold }
+    );
+    obs.observe(el);
+    // Safety net: guarantee content becomes visible even if the observer
+    // never fires (e.g. a non-scrolling crawler), so it's never permanently
+    // stuck at opacity-0.
+    const fallback = setTimeout(() => setVisible(true), 3000);
+    return () => { obs.disconnect(); clearTimeout(fallback); };
+  }, []);
+
+  return { ref, visible };
+}
+
 /* ────────── Particle Canvas ────────── */
 function ParticleCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -180,6 +203,11 @@ export default function HomePage() {
   const stat2 = useAnimatedCounter(80, 2200, "%");
   const stat3 = useAnimatedCounter(15, 1800, "ms");
 
+  const featuresReveal = useReveal<HTMLDivElement>();
+  const howItWorksReveal = useReveal<HTMLDivElement>();
+  const pricingReveal = useReveal<HTMLDivElement>();
+  const ctaReveal = useReveal<HTMLDivElement>();
+
   return (
     <div className="bg-surface-primary text-content-primary min-h-screen font-sans selection:bg-brand-500/30">
       {/* ===== HERO ===== */}
@@ -295,7 +323,10 @@ export default function HomePage() {
 
       {/* ===== FEATURES ===== */}
       <section className="py-24 px-6" id="features">
-        <div className="max-w-6xl mx-auto">
+        <div
+          ref={featuresReveal.ref}
+          className={`max-w-6xl mx-auto transition-opacity duration-700 ${featuresReveal.visible ? "animate-fadeInUp" : "opacity-0"}`}
+        >
           {/* Section Header */}
           <div className="text-center mb-16">
             <span className="text-brand-400 text-sm font-bold uppercase tracking-[0.2em] mb-4 block font-sans">
@@ -399,7 +430,10 @@ export default function HomePage() {
 
       {/* ===== HOW IT WORKS ===== */}
       <section className="py-24 px-6 bg-surface-secondary/30" id="how-it-works">
-        <div className="max-w-6xl mx-auto">
+        <div
+          ref={howItWorksReveal.ref}
+          className={`max-w-6xl mx-auto transition-opacity duration-700 ${howItWorksReveal.visible ? "animate-fadeInUp" : "opacity-0"}`}
+        >
           <div className="text-center mb-16">
             <span className="text-accent-400 text-sm font-bold uppercase tracking-[0.2em] mb-4 block font-sans">
               ⚡ How It Works
@@ -439,7 +473,10 @@ export default function HomePage() {
 
       {/* ===== PRICING ===== */}
       <section className="py-24 px-6" id="pricing">
-        <div className="max-w-6xl mx-auto">
+        <div
+          ref={pricingReveal.ref}
+          className={`max-w-6xl mx-auto transition-opacity duration-700 ${pricingReveal.visible ? "animate-fadeInUp" : "opacity-0"}`}
+        >
           <div className="text-center mb-16">
             <span className="text-brand-400 text-sm font-bold uppercase tracking-[0.2em] mb-4 block font-sans">
               💎 Pricing
@@ -499,7 +536,10 @@ export default function HomePage() {
       {/* ===== CTA ===== */}
       <section className="py-24 px-6 relative overflow-hidden bg-brand-900/20">
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-full bg-[radial-gradient(circle_at_center,rgba(99,102,241,0.15),transparent_70%)]" />
-        <div className="text-center relative z-10 max-w-2xl mx-auto">
+        <div
+          ref={ctaReveal.ref}
+          className={`text-center relative z-10 max-w-2xl mx-auto transition-opacity duration-700 ${ctaReveal.visible ? "animate-fadeInUp" : "opacity-0"}`}
+        >
           <h2 className="text-3xl md:text-5xl font-bold mb-6 text-content-primary font-display">
             Ready to Build Better <span className="text-brand-400">Teams</span>?
           </h2>

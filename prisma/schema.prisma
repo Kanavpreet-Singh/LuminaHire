@@ -84,6 +84,9 @@ model Candidate {
   resumeText  String?  @db.Text
   skills      String[]
   
+  linkedinUrl String?  @db.Text
+  githubUrl   String?  @db.Text
+  
   // Vector embedding for semantic search (1536 dimensions in database).
   embedding   Unsupported("vector(1536)")? 
   
@@ -111,11 +114,66 @@ model Application {
   aiPros      String[]
   aiCons      String[]
   
+  vettingSession VettingSession?
+  
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   @@unique([candidateId, jobId])
   @@map("applications")
+}
+
+model VettingSession {
+  id            String   @id @default(cuid())
+  applicationId String   @unique
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+  
+  status        VettingSessionStatus @default(PLANNING)
+
+  // HITL sessions pause at AWAITING_RESEARCH_INPUT/AWAITING_EVALUATION_APPROVAL;
+  // AUTONOMOUS sessions (batch "Hiring Committee" runs) skip both checkpoints.
+  // Crash-recovery (resume) reads this so a restarted HITL run still pauses
+  // for review instead of silently completing.
+  pipelineMode  VettingPipelineMode @default(HITL)
+
+  // Store the research plan (JSON)
+  researchPlan  Json?
+
+  // Store the gathered research results (JSON)
+  researchResults Json?
+
+  // Store the evaluator's raw findings (dimension scores, evidence, gaps)
+  // pending human approval before the report writer runs.
+  evaluation    Json?
+
+  // Store the final consolidated report / details (JSON)
+  finalReport   Json?
+
+  // Q&A history over the accumulated research context (list of {question, answer, askedAt})
+  qaHistory     Json?
+
+  // Logs of the agent session (JSON array of strings)
+  logs          Json?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("vetting_sessions")
+}
+
+enum VettingSessionStatus {
+  PLANNING
+  RESEARCHING
+  AWAITING_RESEARCH_INPUT
+  EVALUATING
+  AWAITING_EVALUATION_APPROVAL
+  COMPLETED
+  FAILED
+}
+
+enum VettingPipelineMode {
+  HITL
+  AUTONOMOUS
 }
 
 enum AppStatus {

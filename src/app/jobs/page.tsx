@@ -134,10 +134,11 @@ export default function JobsPage() {
                     </div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        {jobs.map((job) => (
-                            <div 
-                                key={job.id} 
-                                className="group relative flex flex-col justify-between p-6 sm:p-8 bg-surface-card border border-border-default rounded-3xl hover:border-brand-500/50 hover:bg-surface-card-hover hover:shadow-xl hover:shadow-brand-500/5 transition-all duration-300 cursor-pointer"
+                        {jobs.map((job, idx) => (
+                            <div
+                                key={job.id}
+                                className="group relative flex flex-col justify-between p-6 sm:p-8 bg-surface-card border border-border-default rounded-3xl hover:border-brand-500/50 hover:bg-surface-card-hover hover:shadow-xl hover:shadow-brand-500/5 transition-all duration-300 cursor-pointer animate-fadeInUp"
+                                style={{ animationDelay: `${Math.min(idx * 0.05, 0.3)}s` }}
                                 onClick={() => setSelectedJob(job)}
                             >
                                 <div className="space-y-4">
@@ -208,20 +209,20 @@ export default function JobsPage() {
                                 )}
                             </div>
 
-                            <div className="p-6 sm:p-8 bg-surface-secondary border-t border-border-default flex items-center justify-between gap-4">
-                                <div className="text-xs text-content-tertiary">
+                            <div className="p-6 sm:p-8 bg-surface-secondary border-t border-border-default flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                                <div className="text-xs text-content-tertiary text-center sm:text-left">
                                     Posted on {new Date(selectedJob.createdAt).toLocaleDateString()}
                                 </div>
-                                <div className="flex gap-3">
-                                    <button 
+                                <div className="flex flex-col-reverse sm:flex-row gap-3">
+                                    <button
                                         onClick={() => setSelectedJob(null)}
-                                        className="px-5 py-2.5 bg-surface-tertiary hover:bg-surface-secondary text-content-secondary border border-border-default font-bold rounded-xl text-sm transition-all"
+                                        className="px-5 py-2.5 bg-surface-tertiary hover:bg-surface-secondary active:scale-[0.98] text-content-secondary border border-border-default font-bold rounded-xl text-sm transition-all"
                                     >
                                         Close
                                     </button>
-                                    <button 
+                                    <button
                                         onClick={() => alert("Successfully applied! Recruiter notified.")}
-                                        className="px-6 py-2.5 bg-[image:var(--gradient-primary)] text-white font-bold rounded-xl text-sm transition-all shadow-lg hover:shadow-xl"
+                                        className="px-6 py-2.5 bg-[image:var(--gradient-primary)] text-white font-bold rounded-xl text-sm transition-all shadow-lg hover:shadow-xl active:scale-[0.98]"
                                     >
                                         Apply Now
                                     </button>

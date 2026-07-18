@@ -14,6 +14,25 @@ export default function NewJobPage() {
     const [error, setError] = useState("");
     const [profile, setProfile] = useState<any>(null);
     const [fetchingProfile, setFetchingProfile] = useState(true);
+    const [profileFetchError, setProfileFetchError] = useState(false);
+
+    const loadProfile = () => {
+        setFetchingProfile(true);
+        setProfileFetchError(false);
+        fetch("/api/profile")
+            .then(res => {
+                if (!res.ok) throw new Error("Failed to load profile");
+                return res.json();
+            })
+            .then(data => {
+                setProfile(data);
+                setFetchingProfile(false);
+            })
+            .catch(() => {
+                setProfileFetchError(true);
+                setFetchingProfile(false);
+            });
+    };
 
     useEffect(() => {
         if (status === "unauthenticated") {
@@ -22,14 +41,9 @@ export default function NewJobPage() {
         }
 
         if (status === "authenticated") {
-            fetch("/api/profile")
-                .then(res => res.json())
-                .then(data => {
-                    setProfile(data);
-                    setFetchingProfile(false);
-                })
-                .catch(() => setFetchingProfile(false));
+            loadProfile();
         }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [status, router]);
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -81,12 +95,31 @@ export default function NewJobPage() {
                     <div className="flex justify-center items-center h-32">
                         <div className="w-8 h-8 border-2 border-brand-500 border-t-transparent rounded-full animate-spin" />
                     </div>
+                ) : profileFetchError ? (
+                    <div className="text-center py-8">
+                        <h3 className="text-xl font-bold text-content-primary mb-3">Couldn't Load Your Profile</h3>
+                        <p className="text-content-secondary mb-6">
+                            Something went wrong while checking your account. Please try again.
+                        </p>
+                        <button
+                            onClick={loadProfile}
+                            className="inline-flex py-3 px-6 bg-[image:var(--gradient-primary)] text-white font-bold rounded-xl shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all cursor-pointer"
+                        >
+                            Retry
+                        </button>
+                    </div>
                 ) : profile?.role !== "RECRUITER" ? (
                     <div className="text-center py-8">
                         <h3 className="text-xl font-bold text-content-primary mb-3">Unauthorized</h3>
                         <p className="text-content-secondary mb-6">
                             You must be a Recruiter to post a job.
                         </p>
+                        <button
+                            onClick={() => router.push("/jobs")}
+                            className="inline-flex py-3 px-6 bg-surface-tertiary hover:bg-surface-secondary text-content-secondary border border-border-default font-bold rounded-xl transition-all cursor-pointer"
+                        >
+                            Back to Jobs
+                        </button>
                     </div>
                 ) : !profile?.user?.companyName && !profile?.companyName ? (
                     <div className="text-center py-8">
@@ -146,18 +179,18 @@ export default function NewJobPage() {
                                 />
                             </div>
 
-                            <div className="pt-4 flex gap-4">
+                            <div className="pt-4 flex flex-col sm:flex-row gap-4">
                                 <button
                                     type="button"
                                     onClick={() => router.push("/dashboard")}
-                                    className="flex-1 py-4 border border-border-default text-lg font-bold rounded-2xl text-content-secondary bg-surface-tertiary hover:bg-surface-secondary transition-all text-center cursor-pointer"
+                                    className="sm:flex-1 py-4 border border-border-default text-lg font-bold rounded-2xl text-content-secondary bg-surface-tertiary hover:bg-surface-secondary active:scale-[0.98] transition-all text-center cursor-pointer order-2 sm:order-1"
                                 >
                                     Cancel
                                 </button>
                                 <button
                                     type="submit"
                                     disabled={loading}
-                                    className="flex-[2] group relative flex justify-center py-4 px-4 border border-transparent text-lg font-bold rounded-2xl text-white bg-[image:var(--gradient-primary)] hover:opacity-95 disabled:opacity-70 disabled:cursor-wait shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all overflow-hidden cursor-pointer"
+                                    className="sm:flex-[2] group relative flex justify-center py-4 px-4 border border-transparent text-lg font-bold rounded-2xl text-white bg-[image:var(--gradient-primary)] hover:opacity-95 disabled:opacity-70 disabled:cursor-wait shadow-lg hover:shadow-xl hover:-translate-y-0.5 active:not-disabled:scale-[0.98] transition-all overflow-hidden cursor-pointer order-1 sm:order-2"
                                 >
                                     {loading ? (
                                         <span className="flex items-center">

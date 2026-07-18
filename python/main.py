@@ -15,9 +15,11 @@ import requests
 import base64
 from typing import List
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+
+import registry
 
 from langchain_community.document_loaders import PyPDFLoader
 from google import genai
@@ -322,6 +324,390 @@ async def process_job(req: ProcessJobRequest):
         traceback.print_exc()
         print(f"Error processing job: {e}")
         raise HTTPException(status_code=500, detail=f"Job processing failed: {str(e)}")
+
+# ── Vetting Agent Endpoints ────────────────────────────────────
+
+class JobInput(BaseModel):
+    title: str
+    description: str
+    requirements: str | None = None
+
+class CandidateInput(BaseModel):
+    name: str
+    email: str
+    resume_text: str | None = None
+    linkedin_url: str | None = None
+    github_url: str | None = None
+
+class VetInitiateRequest(BaseModel):
+    job: JobInput
+    candidate: CandidateInput
+
+class VetExecuteRequest(BaseModel):
+    job: JobInput
+    candidate: CandidateInput
+    planner_output: dict
+
+class VetExecuteAsyncRequest(VetExecuteRequest):
+    session_id: str
+
+class VetRunFullAsyncRequest(VetInitiateRequest):
+    session_id: str
+
+class VetResumeAsyncRequest(BaseModel):
+    session_id: str
+    job: JobInput
+    candidate: CandidateInput
+    planner_output: dict | None = None
+    research_results: list | None = None
+    research_iterations: int | None = 0
+    hitl: bool = False
+    resume_at_evaluator: bool = False
+
+
+class VetResearchFollowupRequest(BaseModel):
+    session_id: str
+    job: JobInput
+    candidate: CandidateInput
+    planner_output: dict
+    research_results: list
+    instruction: str
+
+
+class VetResearchApproveAsyncRequest(BaseModel):
+    session_id: str
+    job: JobInput
+    candidate: CandidateInput
+    planner_output: dict
+    research_results: list
+    research_iterations: int = 0
+
+
+class VetEvaluationApproveAsyncRequest(BaseModel):
+    session_id: str
+    job: JobInput
+    candidate: CandidateInput
+    planner_output: dict
+    research_results: list
+    research_iterations: int = 0
+    evaluation: dict
+
+
+class VetQARequest(BaseModel):
+    session_id: str
+    job: JobInput
+    candidate: CandidateInput
+    planner_output: dict | None = None
+    research_results: list | None = None
+    evaluation: dict | None = None
+    final_report: dict
+    question: str
+
+
+def _job_dict(job: JobInput) -> dict:
+    return {"title": job.title, "description": job.description, "requirements": job.requirements}
+
+def _candidate_dict(c: CandidateInput) -> dict:
+    return {
+        "name": c.name, "email": c.email, "resume_text": c.resume_text,
+        "linkedin_url": c.linkedin_url, "github_url": c.github_url,
+    }
+
+
+@app.post("/vet/initiate")
+async def initiate_vetting(req: VetInitiateRequest):
+    """
+    Runs Stage 1 (Planner Agent) to outline which areas to check.
+    Kept synchronous for backward compatibility with the HITL flow.
+    """
+    import agents
+
+    state = agents.new_state(_job_dict(req.job), _candidate_dict(req.candidate))
+    try:
+        result = agents.app_graph.invoke(state)
+        return {
+            "planner_output": result.get("planner_output"),
+            "logs": result.get("logs", []),
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Vetting initiation failed: {str(e)}")
+
+
+@app.post("/vet/execute")
+async def execute_vetting(req: VetExecuteRequest):
+    """
+    Runs Stage 2 (Researcher -> Evaluator -> Report Writer) synchronously using
+    the approved research plan. Kept for backward compatibility.
+    """
+    import agents
+
+    state = agents.new_state(
+        _job_dict(req.job), _candidate_dict(req.candidate), planner_output=req.planner_output
+    )
+    try:
+        result = agents.app_graph.invoke(state)
+        return {
+            "research_results": result.get("research_results"),
+            "final_report": result.get("final_report"),
+            "logs": result.get("logs", []),
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Vetting execution failed: {str(e)}")
+
+
+# ── Background pipeline runner + async endpoints ────────────────
+
+def _run_pipeline(session_id: str, job: dict, candidate: dict, planner_output,
+                  research_results=None, research_iterations: int = 0, hitl: bool = False,
+                  skip_to_evaluator: bool = False):
+    """
+    Plain `def` so FastAPI runs it in the threadpool (sync LLM calls must NOT
+    block the event loop). Streams the graph and mirrors phase transitions into
+    the in-memory registry.
+
+    Resume semantics (skips already-completed stages):
+      - planner_output is None    -> plan first (run-full)
+      - skip_to_evaluator=True    -> jump straight to evaluation (resume/approve)
+      - otherwise                 -> start from research
+
+    skip_to_evaluator is an EXPLICIT caller decision, not inferred from
+    research_results content -- an approved-but-empty research pass (e.g. the
+    planner's queries all came back empty in real mode) is still a valid
+    "move on to evaluation" case, and an empty list is falsy in Python, so
+    inferring intent from research_results truthiness would silently send an
+    explicitly-approved empty pass back through the researcher instead.
+
+    hitl=True pauses the graph after the first research pass and after
+    evaluation settles (see agents.route_after_researcher/route_after_evaluation),
+    landing on AWAITING_RESEARCH_INPUT / AWAITING_EVALUATION_APPROVAL instead of
+    running straight through to COMPLETED. hitl=False (run-full-async, non-HITL
+    resume) is unaffected and always runs to COMPLETED or FAILED.
+    """
+    import agents
+
+    with registry.PIPELINE_SEMAPHORE:
+        try:
+            base_logs: List[str] = []
+
+            # Pass 1: planning (only when no plan exists yet). Graph pauses at planner->END.
+            if planner_output is None and not research_results:
+                registry.set_phase(session_id, "PLANNING")
+                stage1 = agents.app_graph.invoke(agents.new_state(job, candidate))
+                planner_output = stage1.get("planner_output")
+                base_logs = stage1.get("logs", []) or []
+                registry.set_planner_output(session_id, planner_output)
+                registry.set_progress(session_id, logs=base_logs)
+
+            # Pass 2: research/evaluate/report (or resume mid-way).
+            registry.set_phase(session_id, "EVALUATING" if skip_to_evaluator else "RESEARCHING")
+            if skip_to_evaluator:
+                registry.set_progress(session_id, research_results=research_results or [],
+                                      research_iterations=research_iterations)
+            state2 = agents.new_state(
+                job, candidate, planner_output=planner_output,
+                research_results=research_results, research_iterations=research_iterations,
+                hitl=hitl, skip_to_evaluator=skip_to_evaluator,
+            )
+            state2["logs"] = list(base_logs)
+
+            final = None
+            for step in agents.app_graph.stream(state2, stream_mode="values"):
+                final = step
+                if step.get("final_report") is None and step.get("evaluation") is not None:
+                    registry.set_phase(session_id, "EVALUATING")
+                registry.set_progress(
+                    session_id,
+                    research_results=step.get("research_results"),
+                    research_iterations=step.get("research_iterations"),
+                    logs=step.get("logs"),
+                )
+
+            if final is None:
+                raise RuntimeError("Pipeline produced no output.")
+
+            if final.get("final_report") is not None:
+                registry.set_results(
+                    session_id,
+                    final_report=final.get("final_report"),
+                    research_results=final.get("research_results", []),
+                    logs=final.get("logs", []),
+                    research_iterations=final.get("research_iterations", 0),
+                    planner_output=planner_output,
+                )
+            elif final.get("evaluation") is not None:
+                registry.set_awaiting_evaluation(
+                    session_id,
+                    evaluation=final.get("evaluation"),
+                    research_results=final.get("research_results", []),
+                    research_iterations=final.get("research_iterations", 0),
+                    logs=final.get("logs", []),
+                )
+            else:
+                registry.set_awaiting_research(
+                    session_id,
+                    research_results=final.get("research_results", []),
+                    research_iterations=final.get("research_iterations", 0),
+                    logs=final.get("logs", []),
+                )
+        except Exception as e:
+            traceback.print_exc()
+            registry.set_failed(session_id, str(e))
+
+
+def _run_report_stage(session_id: str, job: dict, candidate: dict, planner_output,
+                      research_results: list, research_iterations: int, evaluation: dict):
+    """
+    Runs ONLY the Report Writer on an already-approved evaluation, bypassing the
+    graph entirely (report_writer_node has no branching, so there's nothing for
+    LangGraph routing to add here). Used by /vet/evaluation/approve-async.
+    """
+    import agents
+
+    with registry.PIPELINE_SEMAPHORE:
+        try:
+            state = agents.new_state(
+                job, candidate, planner_output=planner_output,
+                research_results=research_results, research_iterations=research_iterations,
+                evaluation=evaluation,
+            )
+            result = agents.report_writer_node(state)
+            registry.set_results(
+                session_id,
+                final_report=result.get("final_report"),
+                research_results=research_results,
+                logs=result.get("logs", []),
+                research_iterations=research_iterations,
+                planner_output=planner_output,
+            )
+        except Exception as e:
+            traceback.print_exc()
+            registry.set_failed(session_id, str(e))
+
+
+@app.post("/vet/execute-async", status_code=202)
+async def execute_vetting_async(req: VetExecuteAsyncRequest, background_tasks: BackgroundTasks):
+    """Kick off Stage 2 (research only) in the background for an already-approved
+    plan. Pauses at AWAITING_RESEARCH_INPUT for human review."""
+    if not registry.create(req.session_id, initial_phase="RESEARCHING"):
+        raise HTTPException(status_code=409, detail="A run for this session is already in progress.")
+    background_tasks.add_task(
+        _run_pipeline, req.session_id, _job_dict(req.job), _candidate_dict(req.candidate),
+        req.planner_output, None, 0, True, False,
+    )
+    return {"session_id": req.session_id, "status": "started"}
+
+
+@app.post("/vet/run-full-async", status_code=202)
+async def run_full_async(req: VetRunFullAsyncRequest, background_tasks: BackgroundTasks):
+    """Kick off the entire pipeline (plan -> research -> evaluate -> report) with no HITL."""
+    if not registry.create(req.session_id, initial_phase="PLANNING"):
+        raise HTTPException(status_code=409, detail="A run for this session is already in progress.")
+    background_tasks.add_task(
+        _run_pipeline, req.session_id, _job_dict(req.job), _candidate_dict(req.candidate), None
+    )
+    return {"session_id": req.session_id, "status": "started"}
+
+
+@app.post("/vet/resume-async", status_code=202)
+async def resume_async(req: VetResumeAsyncRequest, background_tasks: BackgroundTasks):
+    """
+    Resume an interrupted run from its last persisted stage. resume_at_evaluator
+    (computed by the Next.js resume route from whether any research results were
+    actually persisted) decides whether the graph resumes at evaluation
+    (skipping re-research) or at research; otherwise it plans first. hitl mirrors
+    the session's pipeline mode so a crash-recovered HITL session still pauses
+    for review instead of silently running to completion.
+    """
+    if not registry.create(req.session_id, initial_phase="RESEARCHING"):
+        raise HTTPException(status_code=409, detail="A run for this session is already in progress.")
+    background_tasks.add_task(
+        _run_pipeline, req.session_id, _job_dict(req.job), _candidate_dict(req.candidate),
+        req.planner_output, req.research_results, req.research_iterations or 0, req.hitl,
+        req.resume_at_evaluator,
+    )
+    return {"session_id": req.session_id, "status": "started"}
+
+
+@app.post("/vet/research/followup")
+async def research_followup(req: VetResearchFollowupRequest):
+    """
+    Synchronous HITL follow-up: an LLM decides which tool(s) (web_search_tool,
+    github_profile_tool, github_topic_search_tool) to call based on the
+    recruiter's free-text instruction, executes them, and returns new findings
+    for the caller to append to the session's research_results. Bounded to a
+    handful of tool calls, so this stays synchronous like the legacy endpoints.
+    """
+    import research_agent
+
+    try:
+        result = research_agent.run_guided_research(
+            _job_dict(req.job), _candidate_dict(req.candidate),
+            req.planner_output, req.research_results, req.instruction,
+        )
+        return result
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Guided research failed: {str(e)}")
+
+
+@app.post("/vet/research/approve-async", status_code=202)
+async def research_approve_async(req: VetResearchApproveAsyncRequest, background_tasks: BackgroundTasks):
+    """Approve the reviewed research and kick off evaluation. Pauses at
+    AWAITING_EVALUATION_APPROVAL for human review."""
+    if not registry.create(req.session_id, initial_phase="EVALUATING"):
+        raise HTTPException(status_code=409, detail="A run for this session is already in progress.")
+    background_tasks.add_task(
+        _run_pipeline, req.session_id, _job_dict(req.job), _candidate_dict(req.candidate),
+        req.planner_output, req.research_results, req.research_iterations or 0, True, True,
+    )
+    return {"session_id": req.session_id, "status": "started"}
+
+
+@app.post("/vet/evaluation/approve-async", status_code=202)
+async def evaluation_approve_async(req: VetEvaluationApproveAsyncRequest, background_tasks: BackgroundTasks):
+    """Approve the reviewed evaluation and generate the final report. Ends COMPLETED."""
+    if not registry.create(req.session_id, initial_phase="EVALUATING"):
+        raise HTTPException(status_code=409, detail="A run for this session is already in progress.")
+    background_tasks.add_task(
+        _run_report_stage, req.session_id, _job_dict(req.job), _candidate_dict(req.candidate),
+        req.planner_output, req.research_results, req.research_iterations or 0, req.evaluation,
+    )
+    return {"session_id": req.session_id, "status": "started"}
+
+
+@app.post("/vet/qa")
+async def vet_qa(req: VetQARequest):
+    """Answer a recruiter's free-text question using the full accumulated pipeline context."""
+    import agents
+
+    try:
+        return agents.answer_qa_question(
+            _job_dict(req.job), _candidate_dict(req.candidate),
+            req.planner_output, req.research_results, req.evaluation, req.final_report, req.question,
+        )
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Q&A failed: {str(e)}")
+
+
+@app.get("/vet/status/{session_id}")
+async def vet_status(session_id: str):
+    """Poll a background run's phase and (once available) results."""
+    entry = registry.get(session_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="No active or recent task for this session id.")
+    return {
+        "phase": entry["phase"],
+        "planner_output": entry["planner_output"],
+        "research_results": entry["research_results"],
+        "evaluation": entry.get("evaluation"),
+        "final_report": entry["final_report"],
+        "logs": entry["logs"],
+        "research_iterations": entry["research_iterations"],
+        "error": entry["error"],
+    }
 
 # ── Health Check ─────────────────────────────────────────────
 @app.get("/health")

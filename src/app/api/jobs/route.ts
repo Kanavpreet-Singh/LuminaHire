@@ -29,6 +29,18 @@ function normalizeEmbeddingDimensions(values: unknown): number[] {
     ];
 }
 
+function calibrateScore(rawScore: number | null): number | null {
+    if (rawScore === null) return null;
+    const minThreshold = 0.68;
+    const maxThreshold = 0.80;
+    
+    if (rawScore <= minThreshold) return 0;
+    if (rawScore >= maxThreshold) return 100;
+    
+    const calibrated = ((rawScore - minThreshold) / (maxThreshold - minThreshold)) * 100;
+    return Math.round(calibrated);
+}
+
 export async function POST(req: Request) {
     try {
         const session = await auth();
@@ -144,10 +156,9 @@ export async function GET(req: Request) {
                     j."createdAt" DESC
             `;
 
-            // Normalize match score to percentage format or null
             const formattedJobs = jobs.map(job => ({
                 ...job,
-                matchScore: job.matchScore !== null ? Math.round(Number(job.matchScore) * 100) : null
+                matchScore: calibrateScore(job.matchScore !== null ? Number(job.matchScore) : null)
             }));
 
             return NextResponse.json(formattedJobs);

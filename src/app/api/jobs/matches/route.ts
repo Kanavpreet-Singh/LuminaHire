@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
+import { getJobMatches } from "@/lib/matches";
 
 export async function GET(req: Request) {
     try {
@@ -30,40 +31,8 @@ export async function GET(req: Request) {
             return new NextResponse("Forbidden", { status: 403 });
         }
 
-        // Execute raw SQL to calculate cosine similarity using pgvector
-        const matches = await prisma.$queryRaw<any[]>`
-            SELECT 
-                c.id,
-                c.name,
-                c.email,
-                c.phone,
-                c.skills,
-                c."resumeUrl",
-                c."resumeText",
-                CASE 
-                    WHEN j.embedding IS NOT NULL AND c.embedding IS NOT NULL 
-                    THEN (1 - (j.embedding <=> c.embedding)) 
-                    ELSE NULL 
-                END as "matchScore"
-            FROM candidates c
-            CROSS JOIN job_postings j
-            WHERE j.id = ${jobId}
-              AND c.embedding IS NOT NULL
-              AND j.embedding IS NOT NULL
-            ORDER BY "matchScore" DESC
-        `;
-
-        // Format and round match scores to percentage values
-        const formattedMatches = matches.map(match => ({
-            id: match.id,
-            name: match.name,
-            email: match.email,
-            phone: match.phone,
-            skills: match.skills || [],
-            resumeUrl: match.resumeUrl,
-            resumeText: match.resumeText,
-            matchScore: match.matchScore !== null ? Math.round(Number(match.matchScore) * 100) : null
-        }));
+        // Rank candidates by pgvector cosine similarity (shared with the committee).
+        const formattedMatches = await getJobMatches(jobId);
 
         return NextResponse.json({
             jobTitle: job.title,

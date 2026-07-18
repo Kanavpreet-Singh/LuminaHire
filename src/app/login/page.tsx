@@ -1,13 +1,13 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { signIn, useSession } from "next-auth/react";
+import { signIn, useSession, getSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 export default function LoginPage() {
     const router = useRouter();
-    const { status } = useSession();
+    const { data: session, status } = useSession();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [error, setError] = useState("");
@@ -17,9 +17,10 @@ export default function LoginPage() {
 
     useEffect(() => {
         if (status === "authenticated") {
-            router.replace("/");
+            const role = (session?.user as any)?.role;
+            router.replace(role === "RECRUITER" ? "/dashboard" : "/jobs");
         }
-    }, [status, router]);
+    }, [status, session, router]);
 
     if (status === "authenticated") return null;
 
@@ -59,7 +60,9 @@ export default function LoginPage() {
                     setError("Invalid email or password");
                 }
             } else {
-                router.push("/");
+                const freshSession = await getSession();
+                const role = (freshSession?.user as any)?.role;
+                router.push(role === "RECRUITER" ? "/dashboard" : "/jobs");
                 router.refresh();
             }
         } catch {
@@ -90,7 +93,7 @@ export default function LoginPage() {
             </div>
 
             {/* Auth Card */}
-            <div className="auth-card-light relative w-full max-w-[440px] p-10 rounded-xl bg-surface-card border border-border-default backdrop-blur-[20px] z-10 shadow-2xl">
+            <div className="auth-card-light relative w-full max-w-[440px] p-10 max-md:p-7 rounded-xl bg-surface-card border border-border-default backdrop-blur-[20px] z-10 shadow-2xl">
                 {/* Header */}
                 <div className="text-center mb-8">
                     <Link href="/" className="no-underline">
@@ -180,7 +183,7 @@ export default function LoginPage() {
 
                     <button
                         type="submit"
-                        className="w-full py-3 rounded-md text-[0.95rem] font-semibold text-white bg-[image:var(--gradient-primary)] border-none cursor-pointer transition-all duration-300 shadow-glow font-[var(--font-sans)] hover:not-disabled:-translate-y-px hover:not-disabled:shadow-glow-strong disabled:opacity-60 disabled:cursor-not-allowed"
+                        className="w-full py-3 rounded-md text-[0.95rem] font-semibold text-white bg-[image:var(--gradient-primary)] border-none cursor-pointer transition-all duration-300 shadow-glow font-[var(--font-sans)] hover:not-disabled:-translate-y-px hover:not-disabled:shadow-glow-strong active:not-disabled:scale-[0.98] disabled:opacity-60 disabled:cursor-not-allowed"
                         disabled={loading}
                     >
                         {loading ? "Signing in..." : "Sign In"}

@@ -104,7 +104,30 @@ export async function POST(req: Request) {
         });
     }
 
-    const { resumeUrl, phone } = body;
+    const { resumeUrl, phone, linkedinUrl, githubUrl } = body;
+
+    // Helper to validate basic URL formats
+    function isValidUrl(urlString: string): boolean {
+        try {
+            new URL(urlString);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    if (linkedinUrl) {
+        if (!isValidUrl(linkedinUrl) || !linkedinUrl.toLowerCase().includes("linkedin.com")) {
+            return new NextResponse("Please provide a valid LinkedIn URL (containing linkedin.com).", { status: 400 });
+        }
+    }
+
+    if (githubUrl) {
+        if (!isValidUrl(githubUrl) || !githubUrl.toLowerCase().includes("github.com")) {
+            return new NextResponse("Please provide a valid GitHub URL (containing github.com).", { status: 400 });
+        }
+    }
+
     // 1. Save or Update the standard fields
     const updatedCandidate = await prisma.candidate.upsert({
         where: { userId: user.id },
@@ -114,10 +137,14 @@ export async function POST(req: Request) {
             email: user.email,
             phone: phone || null,
             resumeUrl: resumeUrl || null,
+            linkedinUrl: linkedinUrl || null,
+            githubUrl: githubUrl || null,
         },
         update: {
             phone: phone !== undefined ? phone : undefined,
             resumeUrl: resumeUrl !== undefined ? resumeUrl : undefined,
+            linkedinUrl: linkedinUrl !== undefined ? (linkedinUrl || null) : undefined,
+            githubUrl: githubUrl !== undefined ? (githubUrl || null) : undefined,
         },
     });
 
