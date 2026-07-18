@@ -1,0 +1,13 @@
+.git
+.next
+node_modules
+python/venv
+python/.venv
+python/__pycache__
+**/__pycache__
+.env
+.env.*
+*.pem
+CN_notes.pdf
+plan.md
+README.md

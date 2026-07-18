@@ -1,0 +1,57 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  WEB_IMAGE: ghcr.io/kanavpreet-singh/luminahire-web
+  PYTHON_IMAGE: ghcr.io/kanavpreet-singh/luminahire-python
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.WEB_IMAGE }}:latest
+
+      - name: Build and push python image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./python
+          file: ./python/Dockerfile
+          push: true
+          tags: ${{ env.PYTHON_IMAGE }}:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/LuminaHire
+            git pull
+            docker compose pull
+            docker compose up -d --remove-orphans

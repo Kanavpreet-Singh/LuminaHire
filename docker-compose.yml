@@ -1,0 +1,26 @@
+services:
+  web:
+    image: ghcr.io/kanavpreet-singh/luminahire-web:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      PYTHON_API_URL: http://python:8000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - python
+
+  python:
+    image: ghcr.io/kanavpreet-singh/luminahire-python:latest
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8000:8000"
