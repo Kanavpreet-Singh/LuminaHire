@@ -28,6 +28,27 @@ from typing import Any, Dict, List, Optional
 # must be allowed to overwrite them, exactly like a COMPLETED run.
 TERMINAL = {"COMPLETED", "FAILED", "AWAITING_RESEARCH_INPUT", "AWAITING_EVALUATION_APPROVAL"}
 
+
+def _merge_logs_locked(entry: Dict[str, Any], logs: List[str]) -> List[str]:
+    """
+    Merge new log lines onto an entry's existing ones (append-only, no
+    duplicates), instead of overwriting. Agent nodes call append_log() directly
+    mid-execution for live step-by-step visibility (see agents.py's
+    _emit_step); every *_progress/_results/_awaiting_*/_failed setter below
+    also receives a `logs` snapshot from the LangGraph state's own (coarser,
+    per-node) accumulator. Overwriting with that snapshot -- especially the
+    terminal ones fired once at the very end of a run -- would silently wipe
+    out every live step the moment the run finishes. Caller must hold _lock.
+    """
+    existing = entry.get("logs") or []
+    seen = set(existing)
+    merged = list(existing)
+    for line in logs:
+        if line not in seen:
+            merged.append(line)
+            seen.add(line)
+    return merged
+
 # Drop terminal entries older than this many seconds (lets pollers read the
 # final result once, then reclaims memory).
 _TTL_SECONDS = 3600
@@ -104,7 +125,17 @@ def set_progress(
     research_iterations: Optional[int] = None,
     logs: Optional[List[str]] = None,
 ) -> None:
-    """Replace the streamed progress snapshots (results/iterations/logs)."""
+    """
+    Update the streamed progress snapshot after a graph node completes.
+
+    logs is MERGED, not replaced: LangGraph's stream() only yields once per
+    node (not per line within a node), but agent nodes also call append_log()
+    directly mid-execution for live step-by-step visibility (see agents.py's
+    _emit_step). Overwriting here would wipe out those already-visible live
+    lines the moment the node finishes and this fires with the node's own
+    (coarser) accumulated logs. Merging keeps every live step line plus
+    whatever new lines the node's return value adds, in order, no duplicates.
+    """
     with _lock:
         e = _tasks.get(session_id)
         if e is None:
@@ -114,7 +145,23 @@ def set_progress(
         if research_iterations is not None:
             e["research_iterations"] = research_iterations
         if logs is not None:
-            e["logs"] = logs
+            e["logs"] = _merge_logs_locked(e, logs)
+        e["updated_at"] = _now()
+
+
+def append_log(session_id: str, line: str) -> None:
+    """
+    Append a single live step/tool-call line (e.g. "Fetching GitHub profile for
+    @torvalds...") to an in-flight run, without touching phase/results. Called
+    from inside agent nodes as they work so pollers see granular progress
+    (Claude-Code-style step feed) instead of a single log line only once the
+    whole node finishes.
+    """
+    with _lock:
+        e = _tasks.get(session_id)
+        if e is None:
+            return
+        e.setdefault("logs", []).append(line)
         e["updated_at"] = _now()
 
 
@@ -128,7 +175,7 @@ def set_awaiting_research(session_id: str, *, research_results: Any,
         e["phase"] = "AWAITING_RESEARCH_INPUT"
         e["research_results"] = research_results
         e["research_iterations"] = research_iterations
-        e["logs"] = logs
+        e["logs"] = _merge_logs_locked(e, logs)
         e["error"] = None
         e["updated_at"] = _now()
 
@@ -144,7 +191,7 @@ def set_awaiting_evaluation(session_id: str, *, evaluation: Any, research_result
         e["evaluation"] = evaluation
         e["research_results"] = research_results
         e["research_iterations"] = research_iterations
-        e["logs"] = logs
+        e["logs"] = _merge_logs_locked(e, logs)
         e["error"] = None
         e["updated_at"] = _now()
 
@@ -159,7 +206,7 @@ def set_results(session_id: str, *, final_report: Any, research_results: Any,
         e["phase"] = "COMPLETED"
         e["final_report"] = final_report
         e["research_results"] = research_results
-        e["logs"] = logs
+        e["logs"] = _merge_logs_locked(e, logs)
         e["research_iterations"] = research_iterations
         if planner_output is not None:
             e["planner_output"] = planner_output

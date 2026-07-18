@@ -9,17 +9,30 @@ Run with:  uvicorn main:app --reload --port 8000
 """
 
 import os
+import sys
 import tempfile
 import traceback
 import requests
 import base64
 from typing import List
 from dotenv import load_dotenv
+
+# Windows consoles default to a legacy codepage (cp1252) that can't encode the
+# emoji used in live agent step logs -- reconfigure to UTF-8 so a step message
+# like "[Step] GitHub: fetching..." never crashes a print() call mid-pipeline.
+# No-op on platforms where stdout is already UTF-8.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 import registry
+import tools
 
 from langchain_community.document_loaders import PyPDFLoader
 from google import genai
@@ -179,6 +192,40 @@ def _extract_text_from_pdf_with_loader(pdf_path: str) -> tuple[str, int]:
     return full_text, len(pages)
 
 
+def _extract_pdf_hyperlinks(pdf_path: str) -> List[str]:
+    """
+    Pull real hyperlink targets (PDF link annotations) out of the resume PDF.
+    Resumes very often show link text like "GitHub" or "Portfolio" with the
+    actual URL only present as a clickable hyperlink, not as visible text --
+    plain text extraction (PyPDFLoader / OCR) misses those entirely. Never
+    raises; returns [] on any failure so resume processing still succeeds.
+    """
+    urls: List[str] = []
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(pdf_path)
+        for page in reader.pages:
+            annots = page.get("/Annots")
+            if not annots:
+                continue
+            for annot_ref in annots:
+                try:
+                    annot = annot_ref.get_object()
+                    if annot.get("/Subtype") != "/Link":
+                        continue
+                    action = annot.get("/A")
+                    if not action:
+                        continue
+                    uri = action.get("/URI")
+                    if uri and str(uri) not in urls:
+                        urls.append(str(uri))
+                except Exception:
+                    continue
+    except Exception as e:
+        print(f"[PDF hyperlink extraction] skipped: {e}")
+    return urls
+
+
 def _extract_text_with_gemini_ocr(pdf_path: str) -> str:
     with open(pdf_path, "rb") as f:
         pdf_bytes = f.read()
@@ -271,6 +318,15 @@ async def process_resume(req: ProcessResumeRequest):
                 status_code=422,
                 detail="Could not extract text from PDF (direct parsing and OCR both failed).",
             )
+
+        # Append real PDF hyperlink targets (link annotations), which are
+        # invisible to plain text extraction -- resumes often show "GitHub" as
+        # the link text with the actual URL only reachable as a hyperlink.
+        # This lets the vetting pipeline's resume URL scan pick them up later.
+        hyperlinks = _extract_pdf_hyperlinks(tmp_path)
+        if hyperlinks:
+            print(f"Found {len(hyperlinks)} PDF hyperlink(s): {hyperlinks[:5]}")
+            full_text += "\n\n[Hyperlinks found in resume PDF]\n" + "\n".join(hyperlinks)
 
         # 3. Generate Gemini embedding
         print(f"[3/3] Generating Gemini embedding ({len(full_text)} chars)...")
@@ -408,9 +464,30 @@ def _job_dict(job: JobInput) -> dict:
     return {"title": job.title, "description": job.description, "requirements": job.requirements}
 
 def _candidate_dict(c: CandidateInput) -> dict:
+    """
+    Build the candidate dict used by every vetting endpoint. The website
+    profile fields (linkedin_url/github_url) always win when present; if
+    either is missing, fall back to a deterministic scan of the resume text
+    (including any real PDF hyperlinks appended during resume processing --
+    see _extract_pdf_hyperlinks) so a candidate who only pasted/linked their
+    GitHub/LinkedIn on their resume still gets researched instead of showing
+    "not found". Every other platform (leetcode/gfg/codeforces/hackerrank/
+    codechef/medium/devto/stackoverflow/npm/scholar/portfolio) has no
+    dedicated website field at all, so those always come from this resume scan.
+    """
+    linkedin_url = c.linkedin_url
+    github_url = c.github_url
+    extra_urls: dict = {k: None for k in tools.PROFILE_URL_KEYS if k not in ("linkedin_url", "github_url")}
+    if c.resume_text:
+        extracted = tools.extract_profile_urls_from_resume(c.resume_text)
+        linkedin_url = linkedin_url or extracted.get("linkedin_url")
+        github_url = github_url or extracted.get("github_url")
+        extra_urls = {k: v for k, v in extracted.items() if k not in ("linkedin_url", "github_url")}
+
     return {
         "name": c.name, "email": c.email, "resume_text": c.resume_text,
-        "linkedin_url": c.linkedin_url, "github_url": c.github_url,
+        "linkedin_url": linkedin_url, "github_url": github_url,
+        **extra_urls,
     }
 
 
@@ -494,7 +571,7 @@ def _run_pipeline(session_id: str, job: dict, candidate: dict, planner_output,
             # Pass 1: planning (only when no plan exists yet). Graph pauses at planner->END.
             if planner_output is None and not research_results:
                 registry.set_phase(session_id, "PLANNING")
-                stage1 = agents.app_graph.invoke(agents.new_state(job, candidate))
+                stage1 = agents.app_graph.invoke(agents.new_state(job, candidate, session_id=session_id))
                 planner_output = stage1.get("planner_output")
                 base_logs = stage1.get("logs", []) or []
                 registry.set_planner_output(session_id, planner_output)
@@ -508,7 +585,7 @@ def _run_pipeline(session_id: str, job: dict, candidate: dict, planner_output,
             state2 = agents.new_state(
                 job, candidate, planner_output=planner_output,
                 research_results=research_results, research_iterations=research_iterations,
-                hitl=hitl, skip_to_evaluator=skip_to_evaluator,
+                hitl=hitl, skip_to_evaluator=skip_to_evaluator, session_id=session_id,
             )
             state2["logs"] = list(base_logs)
 
@@ -570,7 +647,7 @@ def _run_report_stage(session_id: str, job: dict, candidate: dict, planner_outpu
             state = agents.new_state(
                 job, candidate, planner_output=planner_output,
                 research_results=research_results, research_iterations=research_iterations,
-                evaluation=evaluation,
+                evaluation=evaluation, session_id=session_id,
             )
             result = agents.report_writer_node(state)
             registry.set_results(

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useRef, useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -117,6 +117,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
     const [resuming, setResuming] = useState(false);
     const [error, setError] = useState("");
     const [sessionData, setSessionData] = useState<VettingSessionData | null>(null);
+    const stepFeedContainerRef = useRef<HTMLDivElement | null>(null);
 
     // Edit states for the plan
     const [queries, setQueries] = useState<SearchQuery[]>([]);
@@ -146,15 +147,34 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
         fetchSession();
     }, [sessionId]);
 
-    // Poll while a background run is in flight so the timeline advances live.
+    // Poll while a background run is in flight so the step feed advances live.
+    // 1.5s (not the previous 4s) so individual agent tool-call steps -- which
+    // the backend now emits one at a time as they happen, not just once per
+    // whole stage -- show up close to as they occur.
     useEffect(() => {
         const status = sessionData?.status;
         if (status !== "RESEARCHING" && status !== "EVALUATING") return;
         const interval = setInterval(() => {
             refreshSession();
-        }, 4000);
+        }, 1500);
         return () => clearInterval(interval);
     }, [sessionData?.status]);
+
+    // Auto-scroll the live step feed to the newest line as it grows. Scrolls
+    // only this panel's own scrollTop (never scrollIntoView, which walks up
+    // every scrollable ancestor -- including the whole page -- and yanks the
+    // user's page-scroll position around on every poll). Also only auto-
+    // scrolls when the user is already near the bottom, so scrolling up to
+    // read earlier lines doesn't get fought on the next update.
+    useEffect(() => {
+        if (sessionData?.status !== "RESEARCHING" && sessionData?.status !== "EVALUATING") return;
+        const el = stepFeedContainerRef.current;
+        if (!el) return;
+        const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        if (nearBottom) {
+            el.scrollTop = el.scrollHeight;
+        }
+    }, [sessionData?.logs, sessionData?.status]);
 
     const applyPlanFromSession = (vs: VettingSessionData) => {
         if (vs.researchPlan) {
@@ -537,17 +557,8 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                     <div className="rounded-[2rem] border border-white/8 bg-[radial-gradient(circle_at_top_left,rgba(99,102,241,0.18),transparent_38%),linear-gradient(180deg,rgba(18,18,28,0.96),rgba(14,14,20,0.98))] shadow-[0_28px_80px_rgba(0,0,0,0.45)] p-6 sm:p-8">
                         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-5">
                             <div className="space-y-3">
-                                <div className="flex items-center gap-3 flex-wrap">
-                                    <span className="inline-flex items-center gap-2 rounded-full border border-brand-500/30 bg-brand-500/10 px-3 py-1 text-[11px] font-extrabold uppercase tracking-[0.22em] text-brand-400">
-                                        <span className="w-2 h-2 rounded-full bg-brand-400 animate-pulse" />
-                                        Human-in-the-loop
-                                    </span>
-                                    <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-content-tertiary">
-                                        Session {sessionData.id.slice(0, 8)}
-                                    </span>
-                                </div>
                                 <h1 className="text-3xl sm:text-4xl font-black tracking-tight text-white">
-                                    Recruiting {candidate.name}
+                                    Recruiting <span className="gradient-text">{candidate.name}</span>
                                 </h1>
                                 <p className="text-sm sm:text-base text-content-secondary max-w-2xl leading-relaxed">
                                     Applying for <span className="text-white font-bold">{job.title}</span>. Review each stage, approve the next move, and keep the committee fully supervised.
@@ -618,30 +629,50 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
 
                 {/* Dynamic Content Views */}
                 {isRunning && (
-                    <div className="bg-surface-card border border-border-default rounded-3xl p-12 text-center flex flex-col justify-center items-center space-y-6 shadow-md min-h-[300px]">
-                        <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin shadow-[0_0_15px_rgba(59,130,246,0.3)]" />
-                        <div>
-                            <h2 className="text-xl font-bold text-content-primary">
-                                {generatingReport ? "Report Writer Agent is compiling the hiring memo..." :
-                                 isEvaluating ? "Evaluator Agent is scoring the candidate..." : "Researcher Agent is gathering evidence..."}
-                            </h2>
-                            <p className="text-content-secondary text-sm max-w-md mx-auto mt-2">
-                                {generatingReport
-                                    ? "The Report Writer is turning the approved evaluation into a recruiter-facing summary and interview questions."
-                                    : isEvaluating
-                                    ? "The Evaluator is scoring each dimension against the cited evidence."
-                                    : "The Researcher is querying GitHub and grounded web search for verifiable evidence with source links."}
-                            </p>
-                            <span className="inline-block mt-4 px-3 py-1 rounded-full text-xs font-bold bg-blue-500/10 text-blue-500 border border-blue-500/20">
-                                Research pass {Math.max(1, sessionData.finalReport?.research_iterations || (sessionData.researchResults?.length ? 1 : 1))} of 3
+                    <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 shadow-md">
+                        <div className="flex items-center gap-4">
+                            <div className="w-9 h-9 shrink-0 border-[3px] border-blue-500 border-t-transparent rounded-full animate-spin" />
+                            <div className="min-w-0">
+                                <h2 className="text-lg font-bold text-content-primary">
+                                    {generatingReport ? "Report Writer Agent is compiling the hiring memo..." :
+                                     isEvaluating ? "Evaluator Agent is scoring the candidate..." : "Researcher Agent is gathering evidence..."}
+                                </h2>
+                                <p className="text-content-secondary text-xs mt-0.5">
+                                    {generatingReport
+                                        ? "Turning the approved evaluation into a recruiter-facing summary and interview questions."
+                                        : isEvaluating
+                                        ? "Scoring each dimension against the cited evidence."
+                                        : "Querying GitHub, coding profiles, portfolio sites, and grounded web search for verifiable evidence."}
+                                </p>
+                            </div>
+                            <span className="ml-auto shrink-0 px-3 py-1 rounded-full text-xs font-bold bg-blue-500/10 text-blue-500 border border-blue-500/20">
+                                Pass {Math.max(1, sessionData.finalReport?.research_iterations || (sessionData.researchResults?.length ? 1 : 1))} of 3
                             </span>
                         </div>
-                        {/* Live log tail while running */}
+
+                        {/* Live agent step feed: every tool call/decision as it happens */}
                         {sessionData.logs && sessionData.logs.length > 0 && (
-                            <div className="w-full max-w-lg text-left bg-slate-950 text-slate-300 font-mono text-[0.7rem] rounded-2xl p-4 max-h-[120px] overflow-y-auto border border-slate-800 space-y-1">
-                                {sessionData.logs.slice(-5).map((log, idx) => (
-                                    <div key={idx} className="break-all">{log}</div>
-                                ))}
+                            <div className="mt-6 bg-slate-950 rounded-2xl border border-slate-800 overflow-hidden">
+                                <div className="flex items-center gap-2 px-4 py-2.5 border-b border-slate-800 bg-slate-900/60">
+                                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                                    <span className="text-[0.65rem] font-bold uppercase tracking-[0.18em] text-slate-400">Agent activity</span>
+                                </div>
+                                <div ref={stepFeedContainerRef} className="max-h-[280px] overflow-y-auto px-4 py-3 space-y-0">
+                                    {sessionData.logs.map((log, idx) => {
+                                        const isLatest = idx === sessionData.logs.length - 1;
+                                        return (
+                                            <div key={idx} className="flex items-start gap-2.5 py-1">
+                                                <div className="flex flex-col items-center self-stretch shrink-0 pt-1">
+                                                    <span className={`w-1.5 h-1.5 rounded-full ${isLatest ? "bg-emerald-400 animate-pulse" : "bg-slate-700"}`} />
+                                                    {idx < sessionData.logs.length - 1 && <span className="w-px flex-1 bg-slate-800 mt-1" />}
+                                                </div>
+                                                <span className={`text-xs font-mono leading-relaxed break-all pb-1.5 ${isLatest ? "text-slate-100 font-semibold" : "text-slate-500"}`}>
+                                                    {log}
+                                                </span>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
                             </div>
                         )}
                     </div>
@@ -936,11 +967,13 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                                 <div className="flex flex-wrap gap-2 pt-1">
                                                     {r.urls.map((u, uidx) => {
                                                         const url = typeof u === "string" ? u : u.url;
+                                                        const title = typeof u === "string" ? "" : (u.title || "");
                                                         if (!url) return null;
+                                                        const label = title || url.replace(/^https?:\/\//, "").slice(0, 50);
                                                         return (
                                                             <a key={uidx} href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-semibold text-brand-500 hover:underline break-all">
                                                                 <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
-                                                                {url.replace(/^https?:\/\//, "").slice(0, 50)}
+                                                                {label}
                                                             </a>
                                                         );
                                                     })}
@@ -1373,8 +1406,9 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                     </div>
                 )}
 
-                {/* Vetting Logs Terminal console */}
-                {sessionData.logs && sessionData.logs.length > 0 && (
+                {/* Vetting Logs Terminal console (the "Agent Activity" panel above already
+                    covers this live, so only show it once the run isn't actively streaming) */}
+                {!isRunning && sessionData.logs && sessionData.logs.length > 0 && (
                     <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-4 shadow-md">
                         <h3 className="text-sm font-bold text-content-tertiary uppercase tracking-widest">Agent Execution Logs</h3>
                         <div className="bg-slate-950 text-slate-300 font-mono text-xs rounded-2xl p-4 overflow-y-auto max-h-[160px] space-y-1.5 border border-slate-800">

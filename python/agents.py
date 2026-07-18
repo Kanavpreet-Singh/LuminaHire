@@ -31,18 +31,18 @@ from typing import TypedDict, List, Dict, Any, Optional, Annotated
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from google import genai
-from google.genai import types
 from langgraph.graph import StateGraph, START, END
 
 import tools
 import llm_client
+import registry
 
 # Load env variables from parent directory
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 MODEL = "gemini-2.5-flash"
 MAX_RESEARCH_ITERATIONS = 3            # 1 initial pass + up to 2 evaluator-requested passes
-MAX_GROUNDED_CALLS_PER_PASS = 10       # protect Gemini RPM / latency
+MAX_GROUNDED_CALLS_PER_PASS = 2        # matches the "at most 2" guidance given to the model -- non-public candidates rarely have web-searchable narrative detail, so a low cap keeps calls from being wasted chasing unanswerable questions
 USE_MOCK_AI = os.getenv("MOCK_AI_RESPONSES", "1") != "0"
 
 
@@ -80,21 +80,32 @@ def _skill_hints_from_job(job: JobDetails) -> List[str]:
 def _mock_planner_output(state: AgentState) -> Dict[str, Any]:
     candidate = state["candidate"]
     job = state["job"]
-    github_url = candidate.get("github_url")
-    linkedin_url = candidate.get("linkedin_url")
     core_skills = _skill_hints_from_job(job)
     research_plan: List[Dict[str, Any]] = []
 
-    if github_url:
-        research_plan.append({
-            "heading": "Review public GitHub footprint",
-            "explanation": "Check repositories, languages, and activity to validate hands-on engineering depth.",
-            "source": "GITHUB",
-            "search_queries": [
-                f"{candidate['name']} GitHub repositories",
-                f"{candidate['name']} public code contributions",
-            ],
-        })
+    # Mirror what the real ReAct researcher would see: one plan item per
+    # platform the candidate actually has a link for (matches
+    # tools.catalog.URL_TOOLS, the same table the real pass's "Available
+    # profile links" context is built from), plus the always-searchable
+    # name-matched tools (Scholar/arXiv), plus a generic WEB_SEARCH item.
+    for _tool_name, key, label, source in tools.catalog.URL_TOOLS:
+        url = candidate.get(key)
+        if url:
+            research_plan.append({
+                "heading": f"Review {label} profile",
+                "explanation": f"Check activity and track record on {label}.",
+                "source": source,
+                "search_queries": [url],
+            })
+
+    for _tool_name, key, label, source in tools.catalog.CANDIDATE_TOOLS:
+        if key is None or candidate.get(key):
+            research_plan.append({
+                "heading": f"Search {label}",
+                "explanation": f"Look for the candidate's presence on {label}.",
+                "source": source,
+                "search_queries": [candidate["name"]],
+            })
 
     research_plan.append({
         "heading": "Verify public engineering evidence",
@@ -105,17 +116,6 @@ def _mock_planner_output(state: AgentState) -> Dict[str, Any]:
             f"{candidate['name']} public projects",
         ],
     })
-
-    if linkedin_url:
-        research_plan.append({
-            "heading": "Cross-check LinkedIn profile",
-            "explanation": "Validate seniority, role history, and employment timeline.",
-            "source": "LINKEDIN",
-            "search_queries": [
-                candidate["name"],
-                candidate["name"] + " LinkedIn",
-            ],
-        })
 
     company_vetting = {
         "companies": ["Prior employer(s) listed in resume or public profile"],
@@ -138,40 +138,44 @@ def _mock_research_results(state: AgentState, iteration: int, work_items: List[D
     candidate = state["candidate"]
     job = state["job"]
     results: List[Dict[str, Any]] = []
-    github_url = candidate.get("github_url") or f"https://github.com/{candidate['name'].lower().replace(' ', '-')}"
-    linkedin_url = candidate.get("linkedin_url") or f"https://www.linkedin.com/in/{candidate['name'].lower().replace(' ', '-')}"
+
+    # (source -> candidate URL key) for every platform that requires a known
+    # URL, built from the same shared table the real ReAct pass uses, so mock
+    # mode exercises exactly the same "only if a URL is known" guardrail.
+    url_key_by_source = {source: key for _tool_name, key, _label, source in tools.catalog.URL_TOOLS}
+    candidate_key_by_source = {source: key for _tool_name, key, _label, source in tools.catalog.CANDIDATE_TOOLS}
 
     for item in work_items:
         source = (item.get("source") or "WEB_SEARCH").upper()
         heading = item.get("heading", "Research item")
         query = ", ".join(item.get("search_queries") or [])
-        if source == "GITHUB":
-            results.append({
-                "heading": heading,
-                "query": query,
-                "source": "GITHUB",
-                "findings": (
-                    f"Public GitHub activity suggests strong hands-on engineering work, "
-                    f"with repositories relevant to {job['title'].lower()} and systems-level problem solving."
-                ),
-                "status": "SUCCESS",
-                "urls": [github_url],
-                "iteration": iteration,
-            })
+
+        if source in url_key_by_source:
+            url = candidate.get(url_key_by_source[source])
+            if url:
+                results.append({
+                    "heading": heading, "query": query, "source": source,
+                    "findings": (
+                        f"Mock scrape of the candidate's {source.title()} profile shows activity "
+                        f"consistent with {job['title'].lower()} requirements."
+                    ),
+                    "status": "SUCCESS", "urls": [url], "iteration": iteration,
+                })
+            else:
+                results.append({
+                    "heading": heading, "query": query, "source": source,
+                    "findings": f"No {source.title()} profile URL found for this candidate.",
+                    "status": "NOT_FOUND", "urls": [], "iteration": iteration,
+                })
             continue
 
-        if source == "LINKEDIN":
+        if source in candidate_key_by_source:
+            key = candidate_key_by_source[source]
+            url = candidate.get(key) if key else f"https://example.com/mock/{source.lower()}/{candidate['name'].lower().replace(' ', '-')}"
             results.append({
-                "heading": heading,
-                "query": query,
-                "source": "LINKEDIN",
-                "findings": (
-                    "Mock LinkedIn cross-check indicates a consistent senior engineering profile "
-                    "and a plausible progression of technical responsibility."
-                ),
-                "status": "SUCCESS",
-                "urls": [linkedin_url],
-                "iteration": iteration,
+                "heading": heading, "query": query, "source": source,
+                "findings": f"Mock {source.title()} search found public activity by {candidate['name']} relevant to {job['title'].lower()}.",
+                "status": "SUCCESS", "urls": [url], "iteration": iteration,
             })
             continue
 
@@ -295,6 +299,17 @@ class CandidateDetails(TypedDict):
     resume_text: Optional[str]
     linkedin_url: Optional[str]
     github_url: Optional[str]
+    leetcode_url: Optional[str]
+    gfg_url: Optional[str]
+    codeforces_url: Optional[str]
+    hackerrank_url: Optional[str]
+    codechef_url: Optional[str]
+    portfolio_url: Optional[str]
+    medium_url: Optional[str]
+    devto_url: Optional[str]
+    stackoverflow_url: Optional[str]
+    npm_username: Optional[str]
+    scholar_url: Optional[str]
 
 class AgentState(TypedDict):
     job: JobDetails
@@ -309,6 +324,7 @@ class AgentState(TypedDict):
     github_bundle: Optional[Dict[str, Any]]      # per-session GitHub cache
     hitl: bool   # True for the step-wise HITL family; pauses after researcher & evaluator
     skip_to_evaluator: bool   # explicit resume-at-evaluator signal; see route_start
+    session_id: Optional[str]   # registry key for live step emission; see _emit_step
 
 
 # ── Structured Output Schemas (Pydantic) ─────────────────────────
@@ -316,12 +332,22 @@ class AgentState(TypedDict):
 class SearchQuerySchema(BaseModel):
     heading: str = Field(description="A short, catchy title for this research item")
     explanation: str = Field(description="Detailed explanation of why this is being searched and what the goal is")
-    source: str = Field(description="The source to search, e.g. GITHUB, LINKEDIN, or WEB_SEARCH")
+    source: str = Field(description=(
+        "The source to search: GITHUB, LINKEDIN, LEETCODE, GFG, CODEFORCES, HACKERRANK, "
+        "CODECHEF, PORTFOLIO, or WEB_SEARCH"
+    ))
     search_queries: List[str] = Field(description="List of 2-3 target search queries")
 
 class CompanyVettingSchema(BaseModel):
     companies: List[str] = Field(description="List of candidate's past companies mentioned in their resume to research")
-    questions: List[str] = Field(description="Specific questions about their roles or scope of operations at these companies")
+    questions: List[str] = Field(
+        description=(
+            "At most one broad, checkable question per company (e.g. 'does this company exist and is the "
+            "claimed role plausible?') -- NOT multiple narrative sub-questions about specific role/scope/"
+            "technologies/contributions, since most candidates aren't public figures and generic web search "
+            "cannot answer per-employee narrative detail for a private individual."
+        )
+    )
 
 class PlannerOutputSchema(BaseModel):
     target_candidate: str = Field(description="Name of the candidate being vetted")
@@ -349,7 +375,7 @@ class EvaluatorOutputSchema(BaseModel):
     evidence: List[EvidenceItemSchema] = Field(description="Key claims paired with their supporting source URLs")
     evidence_sufficient: bool = Field(description="False if more research is needed to reach a confident verdict")
     additional_research_requests: List[SearchQuerySchema] = Field(
-        description="If evidence is insufficient, up to 3 targeted follow-up research items; otherwise empty"
+        description="If evidence is insufficient, as many targeted follow-up research items as are genuinely needed to reach a confident verdict; otherwise empty"
     )
 
 class QAAnswerSchema(BaseModel):
@@ -368,8 +394,34 @@ class ReportWriterOutputSchema(BaseModel):
 
 # ── Agent Nodes ───────────────────────────────────────────────
 
+def _emit_step(state: AgentState, message: str) -> None:
+    """
+    Push a live step/tool-call line straight into the registry (when running
+    as a background task with a session_id), so pollers see granular,
+    Claude-Code-style progress in real time -- e.g. "Fetching GitHub profile
+    for @torvalds..." as it happens, not just a generic spinner.
+
+    This deliberately bypasses the state's `logs` reducer channel: LangGraph's
+    stream() only yields once per node (a whole researcher_node pass can take
+    10-30s across several tool calls), not per line within a node, so a
+    direct registry write is the only way to surface progress *during* a
+    node's execution rather than only after it returns. See registry.py's
+    set_progress() for how this coexists with the node's own return value.
+    """
+    session_id = state.get("session_id")
+    if session_id:
+        registry.append_log(session_id, message)
+    try:
+        print(f"[Step] {message}")
+    except UnicodeEncodeError:
+        # Legacy console codepage (e.g. Windows cp1252) can't encode emoji --
+        # the registry write above already succeeded, so just skip the print.
+        pass
+
+
 def planner_node(state: AgentState) -> Dict[str, Any]:
     print("[Planner] Running Agent 1: Lead Recruiter (Planner)...")
+    _emit_step(state, f"🧭 Planner: analyzing job requirements and {state['candidate']['name']}'s resume...")
     if USE_MOCK_AI:
         planner_data = _mock_planner_output(state)
         print("[Planner] Mock research plan created.")
@@ -378,9 +430,10 @@ def planner_node(state: AgentState) -> Dict[str, Any]:
             "logs": ["Planner Agent generated a mock research plan."],
         }
 
+    candidate = state["candidate"]
     prompt = f"""
 You are the Lead Recruiter (Planner) Agent. Analyze the Job Description and the Candidate's Resume to determine what additional context and vetting is needed.
-Determine which key skills need verification, what research queries should be run on public search engines or platforms (GitHub/LinkedIn/Web), and what questions should be investigated regarding their past companies.
+Determine which key skills need verification, what research queries should be run on public platforms, and what questions should be investigated regarding their past companies.
 
 JOB DETAILS:
 Title: {state['job']['title']}
@@ -388,17 +441,37 @@ Description: {state['job']['description']}
 Requirements: {state['job']['requirements'] or "N/A"}
 
 CANDIDATE DETAILS:
-Name: {state['candidate']['name']}
-Resume Text: {state['candidate']['resume_text'] or "No resume uploaded."}
-LinkedIn URL: {state['candidate']['linkedin_url'] or "Not provided"}
-GitHub URL: {state['candidate']['github_url'] or "Not provided"}
+Name: {candidate['name']}
+Resume Text: {candidate.get('resume_text') or "No resume uploaded."}
+LinkedIn URL: {candidate.get('linkedin_url') or "Not provided"}
+GitHub URL: {candidate.get('github_url') or "Not provided"}
+LeetCode URL: {candidate.get('leetcode_url') or "Not provided"}
+GeeksforGeeks URL: {candidate.get('gfg_url') or "Not provided"}
+Codeforces URL: {candidate.get('codeforces_url') or "Not provided"}
+HackerRank URL: {candidate.get('hackerrank_url') or "Not provided"}
+CodeChef URL: {candidate.get('codechef_url') or "Not provided"}
+Portfolio website URL: {candidate.get('portfolio_url') or "Not provided"}
 
-Create a highly targeted vetting plan. Be concrete. If a GitHub URL is present, include a research item with source GITHUB to verify the JD skills. If a LinkedIn URL or past companies are present, plan WEB_SEARCH/LINKEDIN items to verify roles and scope.
+Create a highly targeted vetting plan. Be concrete.
+
+IMPORTANT constraints on sources (these are hard rules, not suggestions):
+- GITHUB, LEETCODE, GFG, CODEFORCES, HACKERRANK, CODECHEF, and PORTFOLIO items can ONLY be included when the
+  matching URL above is provided -- these are looked up directly from that URL, never searched for by name.
+  Do not include one of these sources if its URL says "Not provided".
+- LINKEDIN works the same way: LinkedIn cannot be searched or scraped (it blocks this), so only include a
+  LINKEDIN item when a LinkedIn URL is provided above; it will simply be cited as evidence, not searched.
+- WEB_SEARCH is the only source that can be used without a specific URL (general web presence, articles,
+  technical writing, etc.). Most candidates are NOT public figures, so generic web search cannot answer
+  narrative questions about their specific role/scope/contributions at a past company -- companies don't
+  publish per-employee detail. Only propose WEB_SEARCH company-vetting items to check that a company plausibly
+  exists, not to fish for narrative role detail; keep it to at most one broad item per company.
 """
 
     try:
         planner_data = llm_client.structured_generate(prompt, PlannerOutputSchema, temperature=0.1)
         print("[Planner] Research plan created.")
+        plan_len = len(planner_data.get("research_plan") or [])
+        _emit_step(state, f"✅ Planner: research plan ready ({plan_len} item(s) to investigate).")
         return {
             "planner_output": planner_data,
             "logs": ["Planner Agent generated the research plan."],
@@ -442,16 +515,18 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
     logs: List[str] = []
     grounded_calls = 0
 
-    # GitHub bundle: fetch once per session, reuse across loop passes.
-    github_bundle = state.get("github_bundle")
-    github_url = state["candidate"].get("github_url")
+    github_bundle = state.get("github_bundle")  # unused by the ReAct dispatch below; kept as a pass-through state field
 
     if USE_MOCK_AI:
+        _emit_step(state, f"🔎 Researcher: starting pass {iteration} ({len(work_items)} item(s) to investigate)...")
         results = _mock_research_results(state, iteration, work_items)
+        for r in results:
+            _emit_step(state, f"{'✅' if r['status'] == 'SUCCESS' else '⏭️'} {r['source'].title()}: {r['heading']} ({r['status']}).")
         logs.append(
             f"Researcher pass {iteration}: executed {len(results)} mock lookups "
             f"({'follow-up requests' if additional else 'initial plan'})."
         )
+        _emit_step(state, f"✅ Researcher: pass {iteration} complete, {len(results)} finding(s) gathered.")
         return {
             "research_results": results,
             "research_iterations": iteration,
@@ -460,57 +535,184 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
             "logs": logs,
         }
 
-    client = get_genai_client()
+    # AICredits-only for now, per explicit request: no Gemini client is
+    # constructed (commented out below, not deleted -- uncomment to restore).
+    # tool selection now goes through tools.catalog.select_tools()'s
+    # AICredits path, and web_search_tool no longer needs a Gemini client
+    # either (Tavily-only while Gemini grounding is disabled).
+    client = None
+    # try:
+    #     client = get_genai_client()
+    # except Exception:
+    #     client = None
+    candidate = state["candidate"]
+    calls_made = 0
+    _emit_step(state, f"🔎 Researcher: starting pass {iteration}...")
 
-    for item in work_items:
-        source = (item.get("source") or "WEB_SEARCH").upper()
-        heading = item.get("heading", "Research item")
-        queries = item.get("search_queries") or []
+    # Step 1 -- deterministic, unconditional: call every platform tool for
+    # which the candidate has a real, resume-extracted URL. Whether a URL
+    # exists is unambiguous ground truth, not a judgment call, so this never
+    # goes through the LLM at all -- it's not a "fallback," it's the primary
+    # path. This guarantees every platform the resume/planner points to
+    # actually gets researched, instead of leaving it up to a tool-selecting
+    # LLM's discretion (smaller/cheaper models especially tend to reach for
+    # the generic web_search_tool instead of a specific platform tool, even
+    # when a real link is available and explicitly listed).
+    for tool_name, key, label, source in tools.catalog.URL_TOOLS:
+        url = candidate.get(key)
+        if not url or calls_made >= tools.catalog.MAX_TOOL_CALLS_PER_PASS:
+            continue
+        calls_made += 1
+        _emit_step(state, f"🔧 Calling {tool_name}(url={url})...")
+        output = tools.catalog.dispatch(tool_name, {"url": url}, candidate, client=None)
+        urls = output.get("urls") or []
+        findings_text = output.get("findings", "") or "No findings."
+        status = "SUCCESS" if urls else "NOT_FOUND"
+        results.append({
+            "heading": label, "query": url, "source": source,
+            "findings": findings_text, "status": status, "urls": urls, "iteration": iteration,
+        })
+        _emit_step(state, f"{'✅' if status == 'SUCCESS' else '⏭️'} {label}: {status}.")
 
-        if source == "GITHUB":
-            username = tools.extract_github_username(github_url)
-            if not username:
-                results.append({
-                    "heading": heading, "query": github_url or "", "source": "GITHUB",
-                    "findings": "No valid GitHub URL provided for this candidate.",
-                    "status": "NOT_FOUND", "urls": [], "iteration": iteration,
-                })
-                continue
-            if github_bundle is None:
-                github_bundle = tools.fetch_github_bundle(username)
-            if github_bundle.get("error"):
-                results.append({
-                    "heading": heading, "query": username, "source": "GITHUB",
-                    "findings": f"GitHub lookup degraded: {github_bundle['error']}.",
-                    "status": "ERROR", "urls": [], "iteration": iteration,
-                })
-            else:
-                results.append({
-                    "heading": heading, "query": username, "source": "GITHUB",
-                    "findings": tools.summarize_github_bundle(github_bundle),
-                    "status": "SUCCESS", "urls": tools.github_repo_urls(github_bundle),
-                    "iteration": iteration,
-                })
+    if calls_made == 0:
+        # Make the "why" visible instead of silently falling through to Step
+        # 2 -- this is the single most useful diagnostic line when a
+        # candidate ends up with zero platform findings: it tells you
+        # whether resume URL extraction genuinely found nothing (check the
+        # resume for the missing links / PDF hyperlinks) rather than leaving
+        # you to guess whether a tool call failed or was skipped.
+        known = [f"{label}" for name, key, label, _source in tools.catalog.URL_TOOLS if candidate.get(key)]
+        _emit_step(
+            state,
+            f"⏭️ Researcher: no known profile links on file for this candidate out of "
+            f"{len(tools.catalog.URL_TOOLS)} tracked platforms"
+            + (f" (found: {', '.join(known)})" if known else "")
+            + " -- check that the resume text/PDF hyperlinks actually contain these URLs.",
+        )
+
+    # Step 2 -- LLM-judged: only the genuinely ambiguous decisions are left
+    # to the model -- whether checking Medium/Scholar/arXiv is worth it (no
+    # direct URL, name-searched), whether a GitHub topic search adds value,
+    # and what (if anything) needs a general web search. The tool roster
+    # passed here is restricted to exactly these (AMBIGUOUS_OLLAMA_TOOL_
+    # DECLARATIONS) so the model can't re-select an already-handled URL tool.
+    _emit_step(state, "🔎 Researcher: deciding on additional judgment-based research...")
+    plan_hint = json.dumps(work_items, indent=2) if work_items else "(no specific plan items; use judgment based on the job and candidate)"
+    covered_summary = "; ".join(f"{r['source']} ({r['status']})" for r in results) or "(none yet)"
+
+    context = f"""
+You are the Researcher Agent conducting evidence-gathering research pass {iteration} on a job candidate.
+
+JOB: {state['job']['title']}
+CANDIDATE: {candidate['name']}
+Resume excerpt: {(candidate.get('resume_text') or 'N/A')[:1000]}
+
+RESEARCH GOALS from the Planner (hints on what to investigate, not literal instructions):
+{plan_hint}
+
+ALREADY RESEARCHED (every platform with a known profile link/username has already been
+checked deterministically -- do not ask for these again, they are not in your tool list):
+{covered_summary}
+
+The only tools available to you now are for genuinely judgment-based decisions:
+- get_medium_articles / get_scholar_papers / get_arxiv_papers: call if worth checking (these
+  search by name, not a known URL).
+- get_github_topic_data: call only if a specific technology/topic from the research goals is
+  worth verifying against the candidate's repos, and only if GitHub was found above.
+- web_search_tool: this candidate is very unlikely to be a public figure. A generic web search
+  CANNOT answer narrative questions like "what was their specific role" or "what technologies
+  did they use at company X" -- companies don't publish per-employee details, and an ordinary
+  person has no public write-up of their day-to-day work. Do NOT generate multiple narrative
+  sub-questions about the same company; that wastes calls on things web search structurally
+  cannot answer. If a past company is worth checking at all, use AT MOST ONE combined query
+  per company (e.g. "{candidate['name']} {{company name}}") to check for any public trace at
+  all (news mention, published article, conference talk, public repo). Getting NOT_FOUND is
+  the expected, normal outcome for most candidates -- it is not a sign you asked wrong or
+  should retry with a different phrasing. Call this at most twice total this pass, and only
+  when a specific, checkable claim exists -- not to fish for narrative detail.
+Do not call anything if nothing here is relevant.
+"""
+
+    try:
+        tool_calls = tools.catalog.select_tools(context, client=client, tool_declarations=tools.catalog.AMBIGUOUS_OLLAMA_TOOL_DECLARATIONS)
+    except Exception as e:
+        _emit_step(state, f"⚠️ Researcher: judgment-based tool-selection call failed ({e}); skipping this part (platform links above were already researched).")
+        tool_calls = []
+
+    web_search_quota_exhausted = False  # set on first QuotaExceededError; skips remaining Gemini web searches this pass
+
+    for call in (tool_calls or []):
+        name = call.get("name")
+        if not name:
+            continue
+        if calls_made >= tools.catalog.MAX_TOOL_CALLS_PER_PASS:
+            break
+        args = dict(call.get("args") or {})
+        source = tools.catalog.infer_source_from_tool(name)
+        label = tools.catalog.get_tool_label(name)
+
+        if name == "web_search_tool" and grounded_calls >= MAX_GROUNDED_CALLS_PER_PASS:
+            # Check the cap BEFORE emitting a "Calling..." line -- otherwise
+            # this shows up as a misleading log entry for a search that never
+            # actually ran.
+            query = args.get("query", "")
+            calls_made += 1
+            _emit_step(state, f"⏭️ Web search limit reached for this pass ({MAX_GROUNDED_CALLS_PER_PASS} max) -- skipping \"{query}\".")
+            results.append({
+                "heading": f"Web search: {query}", "query": query, "source": source,
+                "findings": "Web search call limit reached for this pass.",
+                "status": "NOT_FOUND", "urls": [], "iteration": iteration,
+            })
             continue
 
-        # LINKEDIN / WEB_SEARCH -> grounded Google Search
-        is_linkedin = source == "LINKEDIN"
-        for q in queries[:2]:
-            if grounded_calls >= MAX_GROUNDED_CALLS_PER_PASS:
-                break
+        calls_made += 1
+        arg_str = ", ".join(f"{k}={v}" for k, v in args.items())
+        _emit_step(state, f"🔧 Calling {name}({arg_str})...")
+
+        if name == "web_search_tool":
+            query = args.get("query", "")
+            candidate_name = candidate.get("name")
+            # AICredits-only for now: Gemini grounding is disabled (commented
+            # out below, not deleted), so this always goes through Tavily.
             grounded_calls += 1
-            text, urls = tools.grounded_search(client, q, linkedin=is_linkedin)
-            status = "SUCCESS" if text and not text.lower().startswith("search failed") else "NOT_FOUND"
+            text, urls = tools.tavily_search(query, candidate_name=candidate_name)
+            # if web_search_quota_exhausted or client is None:
+            #     text, urls = tools.tavily_search(query, candidate_name=candidate_name)
+            # else:
+            #     grounded_calls += 1
+            #     try:
+            #         text, urls = tools.grounded_search(client, query, linkedin=False, candidate_name=candidate_name)
+            #     except tools.QuotaExceededError:
+            #         web_search_quota_exhausted = True
+            #         _emit_step(state, "⚠️ Gemini web search quota exhausted, switching to Tavily fallback...")
+            #         text, urls = tools.tavily_search(query, candidate_name=candidate_name)
+            _NOT_FOUND_PHRASES = ("search failed", "quota exhausted", "unavailable", "did not clearly reference", "no results specific to", "no credible results found")
+            status = "SUCCESS" if urls or (text and not any(p in text.lower() for p in _NOT_FOUND_PHRASES)) else "NOT_FOUND"
             results.append({
-                "heading": heading, "query": q, "source": source,
-                "findings": text or "No findings.", "status": status,
-                "urls": urls, "iteration": iteration,
+                "heading": f"Web search: {query}", "query": query, "source": source,
+                "findings": text or "No findings.", "status": status, "urls": urls, "iteration": iteration,
             })
+            continue
+
+        output = tools.catalog.dispatch(name, args, candidate, client=client)
+        urls = output.get("urls") or []
+        findings_text = output.get("findings", "") or "No findings."
+        status = "SUCCESS" if urls else "NOT_FOUND"
+        results.append({
+            "heading": label, "query": args.get("url") or args.get("topic") or args.get("query") or "",
+            "source": source, "findings": findings_text, "status": status,
+            "urls": urls, "iteration": iteration,
+        })
+        _emit_step(state, f"{'✅' if status == 'SUCCESS' else '⏭️'} {label}: {status}.")
+
+    if calls_made == 0:
+        _emit_step(state, "⏭️ Researcher: no tools were called this pass (no known profile links, and no judgment-based research was warranted).")
 
     logs.append(
-        f"Researcher pass {iteration}: executed {len(results)} lookups "
+        f"Researcher pass {iteration}: executed {len(results)} tool call(s) "
         f"({'follow-up requests' if additional else 'initial plan'})."
     )
+    _emit_step(state, f"✅ Researcher: pass {iteration} complete, {len(results)} finding(s) gathered.")
 
     return {
         "research_results": results,           # appended via reducer
@@ -524,9 +726,12 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
 def evaluator_node(state: AgentState) -> Dict[str, Any]:
     """Pure judge. Scores dimensions from cited evidence; may request more research."""
     print("[Evaluator] Running Agent 3: Technical Evaluator...")
+    evidence_count = len(state.get("research_results") or [])
+    _emit_step(state, f"🧮 Evaluator: scoring candidate against {evidence_count} research finding(s)...")
     if USE_MOCK_AI:
         eval_data = _mock_evaluation(state)
         print("[Evaluator] Mock evaluation complete.")
+        _emit_step(state, f"✅ Evaluator: done (fit {eval_data.get('overall_fit_percentage')}%).")
         return {
             "evaluation": eval_data,
             "additional_requests": [],
@@ -546,7 +751,7 @@ Rules:
 - Only list a skill under verified_skills if a research finding (with a source URL) supports it. Resume-only claims are NOT verified.
 - Score each dimension 0-100 based on the evidence.
 - You MUST populate the evidence list. Whenever any research finding has a status of SUCCESS, include at least 3 evidence items, each pairing a concrete claim with a supporting source_url taken from that finding's `urls` (use source_type RESUME with source_url "resume" only for claims backed solely by the resume). Never return an empty evidence list when SUCCESS findings exist.
-- If the evidence is too thin to judge confidently AND this is not already the final allowed pass ({iteration} of {MAX_RESEARCH_ITERATIONS}), set evidence_sufficient=false and provide up to 3 targeted additional_research_requests. Otherwise set evidence_sufficient=true and leave additional_research_requests empty.
+- If the evidence is too thin to judge confidently AND this is not already the final allowed pass ({iteration} of {MAX_RESEARCH_ITERATIONS}), set evidence_sufficient=false and provide as many targeted additional_research_requests as are genuinely needed to close the gaps -- do not artificially limit the count. Otherwise set evidence_sufficient=true and leave additional_research_requests empty.
 
 JOB DETAILS:
 Title: {state['job']['title']}
@@ -593,6 +798,11 @@ RESEARCH EVIDENCE (with source URLs):
         # Only propagate follow-up requests when we're actually going to loop.
         can_loop = (not sufficient) and requests_list and iteration < MAX_RESEARCH_ITERATIONS
         print(f"[Evaluator] Done. evidence_sufficient={sufficient}, will_loop={bool(can_loop)}")
+        _emit_step(state, (
+            f"🔁 Evaluator: evidence too thin, requesting {len(requests_list)} more research item(s)..."
+            if can_loop else
+            f"✅ Evaluator: done (fit {eval_data.get('overall_fit_percentage')}%)."
+        ))
         return {
             "evaluation": eval_data,
             "additional_requests": requests_list if can_loop else [],
@@ -621,6 +831,7 @@ RESEARCH EVIDENCE (with source URLs):
 def report_writer_node(state: AgentState) -> Dict[str, Any]:
     """Pure communicator. Produces the recruiter-facing report."""
     print("[ReportWriter] Running Agent 4: Report Writer...")
+    _emit_step(state, "📝 Report Writer: drafting the hiring memo and interview questions...")
 
     ev = state.get("evaluation") or {}
     if USE_MOCK_AI:
@@ -678,6 +889,7 @@ RESEARCH EVIDENCE:
         "research_iterations": state.get("research_iterations", 0),
     }
 
+    _emit_step(state, f"✅ Report Writer: hiring memo ready (verdict: {final_report['verdict']}).")
     return {"final_report": final_report, "logs": report_logs}
 
 
@@ -830,13 +1042,16 @@ def new_state(job: Dict[str, Any], candidate: Dict[str, Any],
               research_iterations: int = 0,
               hitl: bool = False,
               evaluation: Optional[Dict[str, Any]] = None,
-              skip_to_evaluator: bool = False) -> AgentState:
+              skip_to_evaluator: bool = False,
+              session_id: Optional[str] = None) -> AgentState:
     """
     Build a correctly-initialized state (reducer channels as lists). Passing
     research_results (from a persisted, interrupted run) lets the graph resume at
     the evaluator and skip re-running the expensive research stage. Passing
     evaluation seeds an already-approved evaluation for a report-writer-only
     invocation (bypasses the graph entirely; see main.py's _run_report_stage).
+    session_id (when running as a background task) lets nodes emit live,
+    per-step progress straight into the registry; see _emit_step.
     """
     return {
         "job": job,
@@ -851,6 +1066,7 @@ def new_state(job: Dict[str, Any], candidate: Dict[str, Any],
         "github_bundle": None,
         "hitl": hitl,
         "skip_to_evaluator": skip_to_evaluator,
+        "session_id": session_id,
     }
 
 

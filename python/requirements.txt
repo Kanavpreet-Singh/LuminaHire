@@ -5,7 +5,10 @@ langchain-community==0.3.24
 langchain-google-genai==2.1.5
 langgraph==0.6.11
 google-genai==2.12.1
+groq==0.13.1
+openai==2.46.0
 pypdf==5.6.0
 requests==2.32.3
+beautifulsoup4==4.13.3
 pydantic==2.13.4
 python-dotenv==1.1.0

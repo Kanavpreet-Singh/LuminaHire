@@ -1,33 +1,20 @@
 """
-LuminaHire — Research Tools
-===========================
-Real data-gathering tools used by the Researcher Agent. No LLM judgment here;
-these functions return raw, verifiable facts with source URLs so the Evaluator
-can cite evidence.
-
-  1. GitHub REST API v3  — public profile / repos / languages / activity.
-     Unauthenticated by default (60 req/hr/IP); set GITHUB_TOKEN to raise to 5000/hr.
-  2. Gemini Google Search grounding — web/company/LinkedIn-adjacent research.
-     Uses the existing GEMINI_API_KEY via the google-genai SDK.
-
-IMPORTANT SDK constraint: the google_search tool cannot be combined with
-response_schema / response_mime_type in the same generate_content call, so the
-grounded search returns raw text + source URLs (no structured output here).
+LuminaHire — GitHub Tool
+=========================
+Public GitHub REST API v3 — profile / repos / languages / activity.
+Unauthenticated by default (60 req/hr/IP); set GITHUB_TOKEN to raise to 5000/hr.
+No LLM judgment here; returns raw, verifiable facts with source URLs.
 """
 
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import requests
-from google.genai import types
 
 GITHUB_API = "https://api.github.com"
 GITHUB_TIMEOUT = 15
-GROUNDING_MODEL = "gemini-2.5-flash"
 
-
-# ── GitHub REST tools ─────────────────────────────────────────
 
 def _gh_headers() -> Dict[str, str]:
     headers = {
@@ -191,12 +178,22 @@ def github_repo_urls(bundle: Dict[str, Any]) -> List[str]:
     return urls
 
 
-def github_topic_search_tool(username: str, topic: str) -> Dict[str, Any]:
+def get_github_data(username_or_url: str) -> Dict[str, Any]:
+    """Fetch and summarize a GitHub profile in the {findings, urls} shape used by the ReAct researcher."""
+    username = extract_github_username(username_or_url) or username_or_url
+    if not username:
+        return {"findings": "No valid GitHub username/URL provided.", "urls": []}
+    bundle = fetch_github_bundle(username)
+    return {"findings": summarize_github_bundle(bundle), "urls": [{"url": u, "title": ""} for u in github_repo_urls(bundle)]}
+
+
+def get_github_topic_data(username_or_url: str, topic: str) -> Dict[str, Any]:
     """
     Search a specific GitHub user's repositories for a topic/keyword (e.g. "MERN
     stack", "machine learning") using the GitHub Search API. Deterministic, no
     LLM judgment. Degrades gracefully (never raises) like the rest of this module.
     """
+    username = extract_github_username(username_or_url) or username_or_url
     query = f"user:{username} {topic} in:name,description,readme"
     data = _gh_get("/search/repositories", params={"q": query, "per_page": 5})
 
@@ -228,78 +225,6 @@ def github_topic_search_tool(username: str, topic: str) -> Dict[str, Any]:
     return {"findings": "\n".join(lines), "urls": urls}
 
 
-# ── Gemini grounded web search ────────────────────────────────
-
-def grounded_search(client: Any, query: str, linkedin: bool = False) -> Tuple[str, List[Dict[str, str]]]:
-    """
-    Run a Google-Search-grounded Gemini query and return (text, urls).
-    urls is a list of {"url", "title"} harvested from grounding metadata.
-
-    NOTE: google_search tool cannot be combined with response_schema, so this
-    returns free text. Every attribute is None-guarded because grounding
-    metadata is absent when grounding does not trigger.
-    """
-    prompt = query
-    if linkedin:
-        prompt = f"{query} (check professional profiles such as site:linkedin.com where relevant)"
-    prompt = (
-        "Research the following and report only verifiable, factual findings with no "
-        f"speculation. If nothing credible is found, say so explicitly.\n\n{prompt}"
-    )
-
-    try:
-        resp = client.models.generate_content(
-            model=GROUNDING_MODEL,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                temperature=0.0,
-            ),
-        )
-    except Exception as e:
-        return (f"Search failed: {e}", [])
-
-    text = getattr(resp, "text", None) or ""
-
-    urls: List[Dict[str, str]] = []
-    candidates = getattr(resp, "candidates", None) or []
-    if candidates:
-        gm = getattr(candidates[0], "grounding_metadata", None)
-        chunks = getattr(gm, "grounding_chunks", None) or [] if gm else []
-        for ch in chunks:
-            web = getattr(ch, "web", None)
-            if web and getattr(web, "uri", None):
-                urls.append({"url": web.uri, "title": getattr(web, "title", "") or ""})
-
-    return text, urls
-
-
-def web_search_tool(client: Any, query: str) -> Dict[str, Any]:
-    """Thin wrapper around grounded_search() in the {findings, urls} shape used by the tool-calling researcher."""
-    text, urls = grounded_search(client, query, linkedin=False)
-    return {"findings": text, "urls": urls}
-
-
-def github_profile_tool(username: str) -> Dict[str, Any]:
-    """Fetch and summarize a GitHub profile in the {findings, urls} shape used by the tool-calling researcher."""
-    bundle = fetch_github_bundle(username)
-    return {"findings": summarize_github_bundle(bundle), "urls": [{"url": u, "title": ""} for u in github_repo_urls(bundle)]}
-
-
-# ── Smoke test ────────────────────────────────────────────────
-if __name__ == "__main__":
-    import json
-    from dotenv import load_dotenv
-    load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
-
-    print("=== GitHub bundle (torvalds) ===")
-    b = fetch_github_bundle("torvalds")
-    print(summarize_github_bundle(b))
-    print("citable urls:", github_repo_urls(b)[:3])
-
-    print("\n=== Grounded search ===")
-    from google import genai
-    client = genai.Client()
-    txt, srcs = grounded_search(client, "What is the LangGraph library used for in Python?")
-    print(txt[:400])
-    print("sources:", json.dumps(srcs[:3], indent=2))
+# Backward-compat aliases (used internally + kept for anything referencing old names)
+github_topic_search_tool = get_github_topic_data
+github_profile_tool = get_github_data
