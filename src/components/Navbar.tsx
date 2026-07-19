@@ -1,13 +1,37 @@
 "use client";
 
-import { useSession, signOut } from "next-auth/react";
+import { useSession, signOut, signIn } from "next-auth/react";
 import Link from "next/link";
 import { useState } from "react";
 import ThemeToggle from "@/components/ThemeToggle";
+import { DEMO_RECRUITER } from "@/lib/demo";
 
 export default function Navbar() {
     const { data: session, status } = useSession();
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const [demoLoading, setDemoLoading] = useState(false);
+
+    async function handleDemoLogin() {
+        if (demoLoading) return;
+        setDemoLoading(true);
+        try {
+            // Make sure the demo recruiter account exists, then sign in as them.
+            await fetch("/api/demo-recruiter", { method: "POST" });
+            const result = await signIn("credentials", {
+                email: DEMO_RECRUITER.email,
+                password: DEMO_RECRUITER.password,
+                redirect: false,
+            });
+            if (result?.error) {
+                setDemoLoading(false);
+                return;
+            }
+            // Full navigation so the new session is picked up everywhere.
+            window.location.href = "/dashboard";
+        } catch {
+            setDemoLoading(false);
+        }
+    }
 
     return (
         <nav className="navbar-glass fixed top-0 left-0 right-0 z-[1000] backdrop-blur-[20px] border-b border-border-default transition-all duration-300">
@@ -69,6 +93,19 @@ export default function Navbar() {
                             </div>
                         ) : (
                             <div className="flex items-center gap-2">
+                                <button
+                                    onClick={handleDemoLogin}
+                                    disabled={demoLoading}
+                                    title="Quick demo: sign in as recruiter John Doe"
+                                    aria-label="Quick demo login as recruiter"
+                                    className="group inline-flex items-center justify-center w-9 h-9 rounded-full text-content-secondary border border-border-default bg-surface-tertiary cursor-pointer transition-all duration-200 hover:text-warning-400 hover:border-warning-400 hover:shadow-glow disabled:opacity-60 disabled:cursor-not-allowed"
+                                >
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={demoLoading ? "animate-pulse-custom" : "transition-transform duration-200 group-hover:scale-110"}>
+                                        <path d="M9 18h6" />
+                                        <path d="M10 22h4" />
+                                        <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" />
+                                    </svg>
+                                </button>
                                 <Link href="/login" className="inline-flex items-center py-2 px-5 rounded-full text-sm font-medium no-underline text-content-secondary transition-all duration-200 hover:text-content-primary">Log In</Link>
                                 <Link href="/register" className="inline-flex items-center py-2 px-6 rounded-full text-sm font-semibold no-underline text-white bg-[image:var(--gradient-primary)] transition-all duration-300 shadow-glow hover:-translate-y-px hover:shadow-glow-strong">Get Started</Link>
                             </div>
@@ -140,6 +177,18 @@ export default function Navbar() {
                             </>
                         ) : (
                             <>
+                                <button
+                                    onClick={() => { setMobileMenuOpen(false); handleDemoLogin(); }}
+                                    disabled={demoLoading}
+                                    className="text-center justify-center w-full inline-flex items-center gap-2 py-2 px-5 rounded-full text-sm font-medium text-content-secondary border border-border-default bg-surface-tertiary cursor-pointer transition-all duration-200 hover:text-warning-400 hover:border-warning-400 disabled:opacity-60"
+                                >
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M9 18h6" />
+                                        <path d="M10 22h4" />
+                                        <path d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5A4.61 4.61 0 0 1 8.91 14" />
+                                    </svg>
+                                    {demoLoading ? "Signing in..." : "Try demo (recruiter)"}
+                                </button>
                                 <Link href="/login" className="text-center justify-center w-full inline-flex items-center py-2 px-5 rounded-full text-sm font-medium no-underline text-content-secondary transition-all duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Log In</Link>
                                 <Link href="/register" className="text-center justify-center w-full inline-flex items-center py-2 px-6 rounded-full text-sm font-semibold no-underline text-white bg-[image:var(--gradient-primary)] transition-all duration-300 shadow-glow hover:-translate-y-px hover:shadow-glow-strong" onClick={() => setMobileMenuOpen(false)}>Get Started</Link>
                             </>
