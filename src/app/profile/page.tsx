@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { UploadDropzone } from "@/utils/uploadthing";
 import "@uploadthing/react/styles.css";
 
@@ -220,19 +219,6 @@ export default function ProfilePage() {
             </div>
 
             <div className="max-w-xl w-full relative z-10">
-                <div className="mb-6 flex justify-start">
-                    <Link
-                        href={isRecruiter ? "/dashboard" : "/jobs"}
-                        className="inline-flex items-center gap-2 px-4 py-2 bg-surface-tertiary hover:bg-surface-secondary text-content-secondary border border-border-default rounded-xl font-bold transition-all shadow-sm text-sm no-underline"
-                    >
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <line x1="19" y1="12" x2="5" y2="12" />
-                            <polyline points="12 19 5 12 12 5" />
-                        </svg>
-                        {isRecruiter ? "Back to Dashboard" : "Back to Jobs"}
-                    </Link>
-                </div>
-
                 <div className="text-center mb-10">
                     <h1 className="text-3xl md:text-5xl font-bold text-content-primary font-display mb-4">
                         My <span className="gradient-text">Profile</span>

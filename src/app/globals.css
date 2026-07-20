@@ -1,6 +1,18 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
 @import "tailwindcss";
 
+/* Turbopack's generated CSS chunk order for Tailwind's responsive variants
+   (md:flex, md:hidden, etc. vs the base .hidden/.flex utilities) is not
+   reliably stable across routes/builds, which can make `hidden md:flex`
+   collapse to display:none on some pages (e.g. the navbar on /profile).
+   Force the responsive display utilities to win regardless of source order. */
+@media (min-width: 768px) {
+  .md\:flex { display: flex !important; }
+  .md\:hidden { display: none !important; }
+  .md\:block { display: block !important; }
+  .md\:inline-flex { display: inline-flex !important; }
+}
+
 /* ==============================================
    STACKMEMO DESIGN SYSTEM — Global Tokens
    All colors defined once, used everywhere.

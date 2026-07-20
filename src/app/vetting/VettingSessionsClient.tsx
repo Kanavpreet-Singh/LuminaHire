@@ -57,9 +57,16 @@ function getFinalFitScore(finalReport: unknown): number | null {
 }
 
 function formatDate(dateInput: string): string {
+    // Fixed, locale-independent format (not toLocaleDateString(), whose output
+    // depends on the runtime's default locale -- the server (Node.js) and the
+    // browser can pick different locales for the same call, producing
+    // different text and a React hydration mismatch).
     const date = new Date(dateInput);
     if (Number.isNaN(date.getTime())) return "";
-    return date.toLocaleDateString();
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
 }
 
 function getStatusBadgeClass(status: string): string {
