@@ -96,6 +96,7 @@ def create(session_id: str, initial_phase: str = "PLANNING") -> bool:
             "logs": [],
             "research_iterations": 0,
             "error": None,
+            "usage": None,
             "started_at": _now(),
             "updated_at": _now(),
         }
@@ -166,7 +167,7 @@ def append_log(session_id: str, line: str) -> None:
 
 
 def set_awaiting_research(session_id: str, *, research_results: Any,
-                          research_iterations: int, logs: List[str]) -> None:
+                          research_iterations: int, logs: List[str], usage: Optional[Dict[str, Any]] = None) -> None:
     """Mark a run AWAITING_RESEARCH_INPUT: the first research pass finished and is paused for human review."""
     with _lock:
         e = _tasks.get(session_id)
@@ -177,11 +178,13 @@ def set_awaiting_research(session_id: str, *, research_results: Any,
         e["research_iterations"] = research_iterations
         e["logs"] = _merge_logs_locked(e, logs)
         e["error"] = None
+        if usage is not None:
+            e["usage"] = usage
         e["updated_at"] = _now()
 
 
 def set_awaiting_evaluation(session_id: str, *, evaluation: Any, research_results: Any,
-                            research_iterations: int, logs: List[str]) -> None:
+                            research_iterations: int, logs: List[str], usage: Optional[Dict[str, Any]] = None) -> None:
     """Mark a run AWAITING_EVALUATION_APPROVAL: evaluation settled and is paused for human review."""
     with _lock:
         e = _tasks.get(session_id)
@@ -193,12 +196,14 @@ def set_awaiting_evaluation(session_id: str, *, evaluation: Any, research_result
         e["research_iterations"] = research_iterations
         e["logs"] = _merge_logs_locked(e, logs)
         e["error"] = None
+        if usage is not None:
+            e["usage"] = usage
         e["updated_at"] = _now()
 
 
 def set_results(session_id: str, *, final_report: Any, research_results: Any,
                 logs: List[str], research_iterations: int, planner_output: Any = None,
-                evaluation: Any = None) -> None:
+                evaluation: Any = None, usage: Optional[Dict[str, Any]] = None) -> None:
     """Mark a run COMPLETED with its final payload. evaluation is included so
     non-HITL (committee) runs -- which never pause at AWAITING_EVALUATION_APPROVAL,
     the only other place it gets recorded -- still expose the evaluator's raw
@@ -216,11 +221,13 @@ def set_results(session_id: str, *, final_report: Any, research_results: Any,
             e["planner_output"] = planner_output
         if evaluation is not None:
             e["evaluation"] = evaluation
+        if usage is not None:
+            e["usage"] = usage
         e["error"] = None
         e["updated_at"] = _now()
 
 
-def set_failed(session_id: str, error: str) -> None:
+def set_failed(session_id: str, error: str, usage: Optional[Dict[str, Any]] = None) -> None:
     with _lock:
         e = _tasks.get(session_id)
         if e is None:
@@ -234,12 +241,15 @@ def set_failed(session_id: str, error: str) -> None:
                 "logs": [f"Pipeline failed: {error}"],
                 "research_iterations": 0,
                 "error": error,
+                "usage": usage,
                 "started_at": _now(),
                 "updated_at": _now(),
             }
             return
         e["phase"] = "FAILED"
         e["error"] = error
+        if usage is not None:
+            e["usage"] = usage
         e["updated_at"] = _now()
 
 

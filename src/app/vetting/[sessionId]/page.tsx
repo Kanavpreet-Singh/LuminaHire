@@ -50,9 +50,17 @@ interface QAEntry {
     askedAt: string;
 }
 
+interface UsageSnapshot {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cost_usd: number;
+    calls: { model: string; prompt_tokens: number; completion_tokens: number; cost_usd: number }[];
+}
+
 interface VettingSessionData {
     id: string;
     status: string;
+    usage: UsageSnapshot | null;
     researchPlan: {
         target_candidate: string;
         core_skills_to_verify: string[];
@@ -639,6 +647,31 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                         </div>
                     </div>
                 </div>
+
+                {/* Cost & Usage: accumulated across every phase this session has run
+                    (initial plan, HITL resumes, follow-ups, Q&A). Full per-node/tool-call
+                    traces with latency are in the Langfuse dashboard under this session's id;
+                    this card is the always-visible cost summary lifted into LuminaHire itself. */}
+                {sessionData.usage && (sessionData.usage.prompt_tokens > 0 || sessionData.usage.completion_tokens > 0) && (
+                    <div className="bg-surface-card border border-border-default rounded-2xl px-6 py-4 shadow-md flex flex-wrap items-center gap-x-8 gap-y-3">
+                        <div className="flex items-center gap-2 text-xs font-bold text-content-tertiary uppercase tracking-widest">
+                            <svg className="w-4 h-4 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                            Session Cost
+                        </div>
+                        <div className="flex items-baseline gap-1.5">
+                            <span className="text-lg font-black text-content-primary">${sessionData.usage.cost_usd.toFixed(4)}</span>
+                            <span className="text-xs text-content-tertiary">total</span>
+                        </div>
+                        <div className="flex items-baseline gap-1.5">
+                            <span className="text-sm font-bold text-content-secondary">{(sessionData.usage.prompt_tokens + sessionData.usage.completion_tokens).toLocaleString()}</span>
+                            <span className="text-xs text-content-tertiary">tokens ({sessionData.usage.prompt_tokens.toLocaleString()} in / {sessionData.usage.completion_tokens.toLocaleString()} out)</span>
+                        </div>
+                        <div className="flex items-baseline gap-1.5">
+                            <span className="text-sm font-bold text-content-secondary">{sessionData.usage.calls.length}</span>
+                            <span className="text-xs text-content-tertiary">LLM call{sessionData.usage.calls.length === 1 ? "" : "s"}</span>
+                        </div>
+                    </div>
+                )}
 
                 {/* Dynamic Content Views */}
                 {isRunning && (

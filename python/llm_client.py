@@ -27,6 +27,8 @@ from pydantic import BaseModel
 from google import genai
 from google.genai import types
 
+import tracing
+
 # Load .env here too so provider keys are available regardless of import order.
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
@@ -90,6 +92,7 @@ def _is_quota_or_overload(exc: Exception) -> bool:
     return any(k in msg for k in ("429", "RESOURCE_EXHAUSTED", "quota", "503", "UNAVAILABLE", "overloaded"))
 
 
+@tracing.observe(as_type="generation", name="gemini_structured_generate")
 def _gemini_structured(prompt: str, schema: Type[BaseModel], temperature: float) -> dict:
     resp = _get_gemini().models.generate_content(
         model=GEMINI_MODEL,
@@ -100,9 +103,16 @@ def _gemini_structured(prompt: str, schema: Type[BaseModel], temperature: float)
             temperature=temperature,
         ),
     )
+    usage = getattr(resp, "usage_metadata", None)
+    if usage is not None:
+        prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
+        completion_tokens = getattr(usage, "candidates_token_count", 0) or 0
+        cost = tracing.record_usage(GEMINI_MODEL, prompt_tokens, completion_tokens)
+        tracing.report_generation_usage(GEMINI_MODEL, prompt_tokens, completion_tokens, cost)
     return json.loads(resp.text)
 
 
+@tracing.observe(as_type="generation", name="groq_structured_generate")
 def _groq_structured(prompt: str, schema: Type[BaseModel], temperature: float) -> dict:
     client = _get_groq()
     if client is None:
@@ -123,12 +133,17 @@ def _groq_structured(prompt: str, schema: Type[BaseModel], temperature: float) -
         response_format={"type": "json_object"},
         temperature=temperature,
     )
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        cost = tracing.record_usage(GROQ_MODEL, usage.prompt_tokens, usage.completion_tokens)
+        tracing.report_generation_usage(GROQ_MODEL, usage.prompt_tokens, usage.completion_tokens, cost)
     raw = resp.choices[0].message.content or "{}"
     data = json.loads(raw)
     # Validate/coerce to the schema so callers get a guaranteed shape.
     return schema.model_validate(data).model_dump()
 
 
+@tracing.observe(as_type="generation", name="openai_structured_generate")
 def _openai_structured(prompt: str, schema: Type[BaseModel], temperature: float) -> dict:
     """
     Structured generation via AICredits, an OpenAI-compatible third-party
@@ -157,11 +172,16 @@ def _openai_structured(prompt: str, schema: Type[BaseModel], temperature: float)
         response_format={"type": "json_object"},
         temperature=temperature,
     )
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        cost = tracing.record_usage(OPENAI_MODEL, usage.prompt_tokens, usage.completion_tokens)
+        tracing.report_generation_usage(OPENAI_MODEL, usage.prompt_tokens, usage.completion_tokens, cost)
     raw = resp.choices[0].message.content or "{}"
     data = json.loads(raw)
     return schema.model_validate(data).model_dump()
 
 
+@tracing.observe(as_type="generation", name="ollama_structured_generate")
 def _ollama_structured(prompt: str, schema: Type[BaseModel], temperature: float) -> dict:
     """
     Schema-constrained generation via local Ollama (LLM_PROVIDER=ollama). Uses
@@ -182,7 +202,13 @@ def _ollama_structured(prompt: str, schema: Type[BaseModel], temperature: float)
         timeout=OLLAMA_TIMEOUT,
     )
     resp.raise_for_status()
-    content = (resp.json().get("message") or {}).get("content", "{}")
+    body = resp.json()
+    prompt_tokens = body.get("prompt_eval_count", 0) or 0
+    completion_tokens = body.get("eval_count", 0) or 0
+    if prompt_tokens or completion_tokens:
+        cost = tracing.record_usage(OLLAMA_MODEL, prompt_tokens, completion_tokens)  # local model -- $0 unless priced above
+        tracing.report_generation_usage(OLLAMA_MODEL, prompt_tokens, completion_tokens, cost)
+    content = (body.get("message") or {}).get("content", "{}")
     data = json.loads(content)
     return schema.model_validate(data).model_dump()
 

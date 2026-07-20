@@ -33,6 +33,7 @@ from pydantic import BaseModel
 
 import registry
 import tools
+import tracing
 
 from langchain_community.document_loaders import PyPDFLoader
 from google import genai
@@ -545,6 +546,7 @@ async def execute_vetting(req: VetExecuteRequest):
 
 # ── Background pipeline runner + async endpoints ────────────────
 
+@tracing.observe(name="vetting_pipeline_run")
 def _run_pipeline(session_id: str, job: dict, candidate: dict, planner_output,
                   research_results=None, research_iterations: int = 0, hitl: bool = False,
                   skip_to_evaluator: bool = False):
@@ -572,6 +574,9 @@ def _run_pipeline(session_id: str, job: dict, candidate: dict, planner_output,
     resume) is unaffected and always runs to COMPLETED or FAILED.
     """
     import agents
+
+    tracing.start_session_trace(session_id, name="vetting_pipeline_run", metadata={"hitl": hitl, "skip_to_evaluator": skip_to_evaluator})
+    tracing.reset_usage()
 
     with registry.PIPELINE_SEMAPHORE:
         try:
@@ -622,6 +627,7 @@ def _run_pipeline(session_id: str, job: dict, candidate: dict, planner_output,
                     research_iterations=final.get("research_iterations", 0),
                     planner_output=planner_output,
                     evaluation=final.get("evaluation"),
+                    usage=tracing.get_usage(),
                 )
             elif final.get("evaluation") is not None:
                 registry.set_awaiting_evaluation(
@@ -630,6 +636,7 @@ def _run_pipeline(session_id: str, job: dict, candidate: dict, planner_output,
                     research_results=final.get("research_results", []),
                     research_iterations=final.get("research_iterations", 0),
                     logs=final.get("logs", []),
+                    usage=tracing.get_usage(),
                 )
             else:
                 registry.set_awaiting_research(
@@ -637,12 +644,14 @@ def _run_pipeline(session_id: str, job: dict, candidate: dict, planner_output,
                     research_results=final.get("research_results", []),
                     research_iterations=final.get("research_iterations", 0),
                     logs=final.get("logs", []),
+                    usage=tracing.get_usage(),
                 )
         except Exception as e:
             traceback.print_exc()
-            registry.set_failed(session_id, str(e))
+            registry.set_failed(session_id, str(e), usage=tracing.get_usage())
 
 
+@tracing.observe(name="report_stage_run")
 def _run_report_stage(session_id: str, job: dict, candidate: dict, planner_output,
                       research_results: list, research_iterations: int, evaluation: dict):
     """
@@ -651,6 +660,9 @@ def _run_report_stage(session_id: str, job: dict, candidate: dict, planner_outpu
     LangGraph routing to add here). Used by /vet/evaluation/approve-async.
     """
     import agents
+
+    tracing.start_session_trace(session_id, name="report_stage_run")
+    tracing.reset_usage()
 
     with registry.PIPELINE_SEMAPHORE:
         try:
@@ -668,10 +680,11 @@ def _run_report_stage(session_id: str, job: dict, candidate: dict, planner_outpu
                 research_iterations=research_iterations,
                 planner_output=planner_output,
                 evaluation=evaluation,
+                usage=tracing.get_usage(),
             )
         except Exception as e:
             traceback.print_exc()
-            registry.set_failed(session_id, str(e))
+            registry.set_failed(session_id, str(e), usage=tracing.get_usage())
 
 
 @app.post("/vet/execute-async", status_code=202)
@@ -719,6 +732,7 @@ async def resume_async(req: VetResumeAsyncRequest, background_tasks: BackgroundT
 
 
 @app.post("/vet/research/followup")
+@tracing.observe(name="research_followup")
 async def research_followup(req: VetResearchFollowupRequest):
     """
     Synchronous HITL follow-up: an LLM decides which tool(s) (web_search_tool,
@@ -729,11 +743,14 @@ async def research_followup(req: VetResearchFollowupRequest):
     """
     import research_agent
 
+    tracing.start_session_trace(req.session_id, name="research_followup")
+    tracing.reset_usage()
     try:
         result = research_agent.run_guided_research(
             _job_dict(req.job), _candidate_dict(req.candidate),
             req.planner_output, req.research_results, req.instruction,
         )
+        result["usage"] = tracing.get_usage()
         return result
     except Exception as e:
         traceback.print_exc()
@@ -766,15 +783,20 @@ async def evaluation_approve_async(req: VetEvaluationApproveAsyncRequest, backgr
 
 
 @app.post("/vet/qa")
+@tracing.observe(name="vet_qa")
 async def vet_qa(req: VetQARequest):
     """Answer a recruiter's free-text question using the full accumulated pipeline context."""
     import agents
 
+    tracing.start_session_trace(req.session_id, name="vet_qa")
+    tracing.reset_usage()
     try:
-        return agents.answer_qa_question(
+        answer = agents.answer_qa_question(
             _job_dict(req.job), _candidate_dict(req.candidate),
             req.planner_output, req.research_results, req.evaluation, req.final_report, req.question,
         )
+        answer["usage"] = tracing.get_usage()
+        return answer
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Q&A failed: {str(e)}")
@@ -795,6 +817,7 @@ async def vet_status(session_id: str):
         "logs": entry["logs"],
         "research_iterations": entry["research_iterations"],
         "error": entry["error"],
+        "usage": entry.get("usage"),
     }
 
 # ── Health Check ─────────────────────────────────────────────

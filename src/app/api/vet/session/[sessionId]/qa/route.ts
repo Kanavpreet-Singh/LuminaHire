@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
-import { PYTHON_API_URL } from "@/lib/vetting";
+import { PYTHON_API_URL, mergeUsage } from "@/lib/vetting";
 
 /**
  * Recruiter Q&A over the full accumulated pipeline context (job, candidate,
@@ -83,7 +83,10 @@ export async function POST(
 
         const updated = await prisma.vettingSession.update({
             where: { id: sessionId },
-            data: { qaHistory: [...existingHistory, newEntry] },
+            data: {
+                qaHistory: [...existingHistory, newEntry],
+                usage: mergeUsage((vettingSession as any).usage, pythonData.usage) as any,
+            },
             include: { application: { include: { candidate: true, job: true } } },
         });
 

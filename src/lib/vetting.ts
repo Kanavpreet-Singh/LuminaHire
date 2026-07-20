@@ -14,6 +14,14 @@ type PythonStatus = {
     logs: string[];
     research_iterations: number;
     error: string | null;
+    usage: UsageSnapshot | null;
+};
+
+export type UsageSnapshot = {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cost_usd: number;
+    calls: { model: string; prompt_tokens: number; completion_tokens: number; cost_usd: number }[];
 };
 
 function mergeLogs(existing: unknown, incoming: unknown): string[] {
@@ -31,6 +39,37 @@ function mergeLogs(existing: unknown, incoming: unknown): string[] {
 }
 
 /**
+ * Accumulate one pipeline phase's token/cost usage onto the session's running
+ * total. A VettingSession can go through several separate Python-side runs
+ * over its lifetime (initial plan, HITL research/evaluation resumes,
+ * follow-ups, Q&A), each reporting its own usage snapshot (see
+ * python/tracing.py's reset_usage/get_usage) -- this is additive, never a
+ * replace, so the session's total reflects its FULL cost, not just the most
+ * recent phase. Caps the retained `calls` list so the JSON column can't grow
+ * unbounded across a very long-lived, heavily-QA'd session.
+ */
+export function mergeUsage(existing: unknown, incoming: unknown): UsageSnapshot | null {
+    const e = existing && typeof existing === "object" ? (existing as Partial<UsageSnapshot>) : null;
+    const i = incoming && typeof incoming === "object" ? (incoming as Partial<UsageSnapshot>) : null;
+    if (!i) return (e as UsageSnapshot) || null;
+    if (!e) {
+        return {
+            prompt_tokens: i.prompt_tokens || 0,
+            completion_tokens: i.completion_tokens || 0,
+            cost_usd: i.cost_usd || 0,
+            calls: Array.isArray(i.calls) ? i.calls.slice(-200) : [],
+        };
+    }
+    const calls = [...(Array.isArray(e.calls) ? e.calls : []), ...(Array.isArray(i.calls) ? i.calls : [])].slice(-200);
+    return {
+        prompt_tokens: (e.prompt_tokens || 0) + (i.prompt_tokens || 0),
+        completion_tokens: (e.completion_tokens || 0) + (i.completion_tokens || 0),
+        cost_usd: Math.round(((e.cost_usd || 0) + (i.cost_usd || 0)) * 1e6) / 1e6,
+        calls,
+    };
+}
+
+/**
  * Persist a COMPLETED result exactly once, using an updateMany status-guard as
  * an idempotency lock so concurrent pollers (detail page, list page, multiple
  * tabs) can't double-apply. Only the winning writer syncs the Application.
@@ -40,7 +79,8 @@ export async function syncCompletedResults(
     sessionId: string,
     applicationId: string,
     existingLogs: unknown,
-    python: PythonStatus
+    python: PythonStatus,
+    existingUsage: unknown
 ): Promise<boolean> {
     const finalReport = python.final_report || {};
     const researchResults = python.research_results || [];
@@ -53,6 +93,7 @@ export async function syncCompletedResults(
             researchResults,
             finalReport,
             logs: combinedLogs,
+            usage: mergeUsage(existingUsage, python.usage) as any,
             // Backfill the plan for committee runs that started without one.
             ...(python.planner_output ? { researchPlan: python.planner_output } : {}),
             // Persist the evaluator's raw output too: non-HITL (committee) runs
@@ -89,7 +130,8 @@ export async function syncCompletedResults(
 export async function syncAwaitingResearch(
     sessionId: string,
     existingLogs: unknown,
-    python: PythonStatus
+    python: PythonStatus,
+    existingUsage: unknown
 ): Promise<boolean> {
     const claim = await prisma.vettingSession.updateMany({
         where: { id: sessionId, status: { in: [...RUNNING_STATUSES] } },
@@ -97,6 +139,7 @@ export async function syncAwaitingResearch(
             status: "AWAITING_RESEARCH_INPUT",
             researchResults: python.research_results || [],
             logs: mergeLogs(existingLogs, python.logs),
+            usage: mergeUsage(existingUsage, python.usage) as any,
             ...(python.planner_output ? { researchPlan: python.planner_output } : {}),
         },
     });
@@ -111,7 +154,8 @@ export async function syncAwaitingResearch(
 export async function syncAwaitingEvaluation(
     sessionId: string,
     existingLogs: unknown,
-    python: PythonStatus
+    python: PythonStatus,
+    existingUsage: unknown
 ): Promise<boolean> {
     const claim = await prisma.vettingSession.updateMany({
         where: { id: sessionId, status: { in: [...RUNNING_STATUSES] } },
@@ -120,6 +164,7 @@ export async function syncAwaitingEvaluation(
             evaluation: python.evaluation || {},
             researchResults: python.research_results || [],
             logs: mergeLogs(existingLogs, python.logs),
+            usage: mergeUsage(existingUsage, python.usage) as any,
         },
     });
     return claim.count === 1;
@@ -140,6 +185,7 @@ type SessionWithApp = {
     logs: unknown;
     researchPlan: unknown;
     batchId?: string | null;
+    usage?: unknown;
 };
 
 /**
@@ -181,7 +227,7 @@ export async function pollThroughPython<T extends SessionWithApp>(session: T): P
     }
 
     if (python.phase === "COMPLETED") {
-        await syncCompletedResults(session.id, session.applicationId, session.logs, python);
+        await syncCompletedResults(session.id, session.applicationId, session.logs, python, session.usage);
         if (session.batchId) await maybeFinalizeBatch(session.batchId);
         return refetch(session);
     }
@@ -191,11 +237,11 @@ export async function pollThroughPython<T extends SessionWithApp>(session: T): P
         return refetch(session);
     }
     if (python.phase === "AWAITING_RESEARCH_INPUT") {
-        await syncAwaitingResearch(session.id, session.logs, python);
+        await syncAwaitingResearch(session.id, session.logs, python, session.usage);
         return refetch(session);
     }
     if (python.phase === "AWAITING_EVALUATION_APPROVAL") {
-        await syncAwaitingEvaluation(session.id, session.logs, python);
+        await syncAwaitingEvaluation(session.id, session.logs, python, session.usage);
         return refetch(session);
     }
 
@@ -212,6 +258,9 @@ export async function pollThroughPython<T extends SessionWithApp>(session: T): P
         }
         if (Array.isArray(python.logs) && python.logs.length) {
             data.logs = mergeLogs(session.logs, python.logs);
+        }
+        if (python.usage) {
+            data.usage = mergeUsage(session.usage, python.usage);
         }
         if (Object.keys(data).length > 0) {
             await prisma.vettingSession.updateMany({

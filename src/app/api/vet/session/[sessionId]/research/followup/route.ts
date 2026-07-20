@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
-import { PYTHON_API_URL } from "@/lib/vetting";
+import { PYTHON_API_URL, mergeUsage } from "@/lib/vetting";
 
 /**
  * HITL "ask the researcher to dig deeper" follow-up. Sends the recruiter's
@@ -84,6 +84,7 @@ export async function POST(
             data: {
                 researchResults: [...existingResults, ...newResults],
                 logs: [...existingLogs, ...followupLogs],
+                usage: mergeUsage((vettingSession as any).usage, pythonData.usage) as any,
             },
             include: { application: { include: { candidate: true, job: true } } },
         });

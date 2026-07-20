@@ -36,6 +36,7 @@ from langgraph.graph import StateGraph, START, END
 import tools
 import llm_client
 import registry
+import tracing
 
 # Load env variables from parent directory
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -419,6 +420,7 @@ def _emit_step(state: AgentState, message: str) -> None:
         pass
 
 
+@tracing.observe(name="planner_node")
 def planner_node(state: AgentState) -> Dict[str, Any]:
     print("[Planner] Running Agent 1: Lead Recruiter (Planner)...")
     _emit_step(state, f"🧭 Planner: analyzing job requirements and {state['candidate']['name']}'s resume...")
@@ -508,6 +510,7 @@ def _work_items_from_plan(planner_output: Dict[str, Any]) -> List[Dict[str, Any]
     return items
 
 
+@tracing.observe(name="researcher_node")
 def researcher_node(state: AgentState) -> Dict[str, Any]:
     """Pure tool executor. Runs the plan (or the evaluator's follow-up requests)."""
     iteration = state.get("research_iterations", 0) + 1
@@ -743,6 +746,7 @@ Do not call anything if nothing here is relevant.
     }
 
 
+@tracing.observe(name="evaluator_node")
 def evaluator_node(state: AgentState) -> Dict[str, Any]:
     """Pure judge. Scores dimensions from cited evidence; may request more research."""
     print("[Evaluator] Running Agent 3: Technical Evaluator...")
@@ -853,6 +857,7 @@ RESEARCH EVIDENCE (with source URLs):
         }
 
 
+@tracing.observe(name="report_writer_node")
 def report_writer_node(state: AgentState) -> Dict[str, Any]:
     """Pure communicator. Produces the recruiter-facing report."""
     print("[ReportWriter] Running Agent 4: Report Writer...")
@@ -950,6 +955,7 @@ def _mock_qa_answer(candidate: CandidateDetails, question: str, evaluation: Opti
     }
 
 
+@tracing.observe(name="qa_node")
 def answer_qa_question(job: Dict[str, Any], candidate: Dict[str, Any],
                         planner_output: Optional[Dict[str, Any]],
                         research_results: Optional[List[Dict[str, Any]]],

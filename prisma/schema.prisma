@@ -167,6 +167,13 @@ model VettingSession {
   // so restart/resume routes can rebuild the Python job payload without a join.
   recruiterInstructions String? @db.Text
 
+  // Accumulated LLM token/cost usage across every pipeline phase this session
+  // has gone through (initial run, HITL resumes, follow-ups, Q&A). Shape:
+  // {prompt_tokens, completion_tokens, cost_usd, calls: [{model, prompt_tokens,
+  // completion_tokens, cost_usd}]}. Populated by the Python service's tracing
+  // module (see python/tracing.py) and merged in by src/lib/vetting.ts.
+  usage         Json?
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

@@ -29,6 +29,7 @@ import requests
 from google.genai import types
 
 import llm_client
+import tracing
 from . import (
     github_tool, linkedin_tool, leetcode_tool, gfg_tool, codeforces_tool,
     hackerrank_tool, codechef_tool, medium_tool, devto_tool, stackoverflow_tool,
@@ -207,6 +208,7 @@ URL_TOOLS = _URL_TOOLS
 CANDIDATE_TOOLS = _CANDIDATE_TOOLS
 
 
+@tracing.observe(name="tool_call")
 def dispatch(name: str, args: Dict[str, Any], candidate: Dict[str, Any], client: Any = None) -> Dict[str, Any]:
     """
     Execute a tool call by name. Every tool here returns {findings, urls} and
@@ -274,6 +276,7 @@ _TOOL_SELECTION_SYSTEM_PROMPT = (
 )
 
 
+@tracing.observe(as_type="generation", name="openai_select_tools")
 def _select_tools_openai(prompt: str, tool_declarations: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Tool selection via AICredits (OpenAI-compatible chat completions `tools` param)."""
     client = llm_client._get_openai()
@@ -288,6 +291,10 @@ def _select_tools_openai(prompt: str, tool_declarations: List[Dict[str, Any]] = 
         tools=tool_declarations if tool_declarations is not None else OLLAMA_TOOL_DECLARATIONS,
         temperature=0.1,
     )
+    usage = getattr(resp, "usage", None)
+    if usage is not None:
+        cost = tracing.record_usage(llm_client.OPENAI_MODEL, usage.prompt_tokens, usage.completion_tokens)
+        tracing.report_generation_usage(llm_client.OPENAI_MODEL, usage.prompt_tokens, usage.completion_tokens, cost)
     message = resp.choices[0].message
     calls: List[Dict[str, Any]] = []
     for tc in (message.tool_calls or []):
