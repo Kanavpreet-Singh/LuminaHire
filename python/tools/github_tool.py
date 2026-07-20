@@ -14,6 +14,9 @@ import requests
 
 GITHUB_API = "https://api.github.com"
 GITHUB_TIMEOUT = 15
+MAX_REPO_PAGES = 3          # per_page=100 x 3 = up to 300 repos scanned (vs. the old hardcoded 10) -- covers the vast majority of candidates without unbounded pagination
+MAX_LANGUAGE_REPOS = 12     # bounded /repos/languages calls per candidate -- protects the 60/hr unauthenticated rate limit; set GITHUB_TOKEN (5000/hr) for reliable use at this scale
+MIN_REPO_SIZE_KB = 1        # excludes literally-empty scaffold repos (size 0) from the tech-stack ranking, not small-but-real projects
 
 
 def _gh_headers() -> Dict[str, str]:
@@ -70,11 +73,29 @@ def _gh_get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
         return {"error": "invalid_json"}
 
 
+def _fetch_all_repos(username: str) -> List[Dict[str, Any]]:
+    """
+    Paginate through a user's public repos (up to MAX_REPO_PAGES x 100), instead
+    of only the 10 most-recently-pushed. A candidate's biggest/most substantive
+    project is frequently not their most recently touched one, so the old
+    per_page=10 cutoff silently dropped it from the tech-stack analysis below.
+    """
+    all_repos: List[Dict[str, Any]] = []
+    for page in range(1, MAX_REPO_PAGES + 1):
+        batch = _gh_get(f"/users/{username}/repos", params={"sort": "pushed", "per_page": 100, "page": page})
+        if not isinstance(batch, list) or not batch:
+            break
+        all_repos.extend(batch)
+        if len(batch) < 100:
+            break
+    return all_repos
+
+
 def fetch_github_bundle(username: str) -> Dict[str, Any]:
     """
-    Gather a compact, factual snapshot of a public GitHub user in <= ~8 requests.
-    All findings are deterministic (no LLM). Repo html_urls are included so the
-    Evaluator can cite them as evidence.
+    Gather a compact, factual snapshot of a public GitHub user. All findings
+    are deterministic (no LLM). Repo html_urls are included so the Evaluator
+    can cite them as evidence.
     """
     bundle: Dict[str, Any] = {"username": username, "html_url": f"https://github.com/{username}"}
 
@@ -95,34 +116,60 @@ def fetch_github_bundle(username: str) -> Dict[str, Any]:
         "html_url": profile.get("html_url"),
     }
 
-    repos = _gh_get(f"/users/{username}/repos", params={"sort": "pushed", "per_page": 10})
+    all_repos = _fetch_all_repos(username)
     repo_list: List[Dict[str, Any]] = []
-    top_non_forks: List[str] = []
-    if isinstance(repos, list):
-        for r in repos:
-            is_fork = bool(r.get("fork"))
-            repo_list.append({
-                "name": r.get("name"),
-                "description": r.get("description"),
-                "language": r.get("language"),
-                "stars": r.get("stargazers_count"),
-                "forks": r.get("forks_count"),
-                "is_fork": is_fork,
-                "pushed_at": r.get("pushed_at"),
-                "html_url": r.get("html_url"),
-            })
-            if not is_fork and len(top_non_forks) < 5:
-                top_non_forks.append(r.get("name"))
+    for r in all_repos:
+        repo_list.append({
+            "name": r.get("name"),
+            "description": r.get("description"),
+            "language": r.get("language"),
+            "size_kb": r.get("size") or 0,
+            "stars": r.get("stargazers_count"),
+            "forks": r.get("forks_count"),
+            "is_fork": bool(r.get("fork")),
+            "pushed_at": r.get("pushed_at"),
+            "html_url": r.get("html_url"),
+        })
     bundle["repos"] = repo_list
+    bundle["total_repos_scanned"] = len(repo_list)
 
-    # Languages for up to 5 top non-fork repos (keeps request budget bounded).
-    languages: Dict[str, int] = {}
-    for repo_name in top_non_forks:
-        lang_data = _gh_get(f"/repos/{username}/{repo_name}/languages")
+    # Rank OWN (non-fork) repos by size -- a field already returned by the
+    # repos-list call above, at zero extra request cost -- so the biggest,
+    # most substantive projects drive the tech-stack read instead of whatever
+    # was most recently pushed. A fork inherits the upstream repo's full
+    # size/history rather than reflecting the candidate's own code, so forks
+    # are excluded from both this ranking and the /languages calls below.
+    non_forks = [r for r in repo_list if not r["is_fork"] and r["size_kb"] >= MIN_REPO_SIZE_KB]
+    non_forks_by_size = sorted(non_forks, key=lambda r: r["size_kb"], reverse=True)
+    top_by_size = non_forks_by_size[:MAX_LANGUAGE_REPOS]
+    bundle["non_fork_repo_count"] = len(non_forks)
+
+    # Per-language byte breakdown for the largest non-fork repos only (bounded
+    # request budget -- see MAX_LANGUAGE_REPOS). GitHub's REST API has no
+    # literal "lines of code" endpoint (that requires cloning + a tool like
+    # cloc); /languages' byte-per-language counts are the same proxy GitHub's
+    # own repo-page language bar uses. Those bytes are themselves roughly
+    # proportional to a repo's size, so simply summing raw bytes across the
+    # biggest repos already yields a size-weighted tech-stack profile --
+    # a big real project naturally outweighs a tiny toy repo without any
+    # extra weighting formula.
+    language_bytes: Dict[str, int] = {}
+    analyzed_repos: List[str] = []
+    for repo in top_by_size:
+        lang_data = _gh_get(f"/repos/{username}/{repo['name']}/languages")
         if isinstance(lang_data, dict) and not lang_data.get("error"):
+            analyzed_repos.append(repo["name"])
             for lang, byte_count in lang_data.items():
-                languages[lang] = languages.get(lang, 0) + int(byte_count)
-    bundle["languages"] = dict(sorted(languages.items(), key=lambda kv: kv[1], reverse=True))
+                language_bytes[lang] = language_bytes.get(lang, 0) + int(byte_count)
+
+    total_bytes = sum(language_bytes.values())
+    tech_stack = [
+        {"language": lang, "bytes": count, "percent": round(count / total_bytes * 100, 1) if total_bytes else 0.0}
+        for lang, count in sorted(language_bytes.items(), key=lambda kv: kv[1], reverse=True)
+    ]
+    bundle["languages"] = {t["language"]: t["bytes"] for t in tech_stack}  # back-compat shape
+    bundle["tech_stack"] = tech_stack
+    bundle["repos_analyzed_for_tech_stack"] = analyzed_repos
 
     # Recent public activity, aggregated by event type.
     events = _gh_get(f"/users/{username}/events/public", params={"per_page": 30})
@@ -149,15 +196,27 @@ def summarize_github_bundle(bundle: Dict[str, Any]) -> str:
         f"- Public repos: {p.get('public_repos')}; Followers: {p.get('followers')}; "
         f"Member since: {p.get('created_at')}",
     ]
-    langs = bundle.get("languages") or {}
-    if langs:
-        lines.append("- Top languages (by bytes): " + ", ".join(list(langs.keys())[:8]))
+
+    total_scanned = bundle.get("total_repos_scanned", 0)
+    non_fork_count = bundle.get("non_fork_repo_count", 0)
+    analyzed = bundle.get("repos_analyzed_for_tech_stack") or []
+    tech_stack = bundle.get("tech_stack") or []
+    if tech_stack:
+        lines.append(
+            f"- Tech stack by code volume (bytes of code across the {len(analyzed)} largest of "
+            f"{non_fork_count} original, non-fork repos out of {total_scanned} public repos scanned -- "
+            f"weighted by project size, not recency, so small toy repos don't outrank real projects):"
+        )
+        for t in tech_stack[:8]:
+            lines.append(f"  * {t['language']}: {t['percent']}%")
+
     repos = [r for r in bundle.get("repos", []) if not r.get("is_fork")]
-    if repos:
-        lines.append("- Notable non-fork repos:")
-        for r in repos[:6]:
+    repos_by_size = sorted(repos, key=lambda r: r.get("size_kb") or 0, reverse=True)
+    if repos_by_size:
+        lines.append("- Largest original projects (ranked by repo size, not recency):")
+        for r in repos_by_size[:6]:
             lines.append(
-                f"  * {r.get('name')} ({r.get('language') or 'N/A'}, "
+                f"  * {r.get('name')} ({r.get('language') or 'N/A'}, {r.get('size_kb', 0)} KB, "
                 f"{r.get('stars', 0)} stars) - {r.get('description') or 'no description'} [{r.get('html_url')}]"
             )
     activity = bundle.get("recent_activity") or {}

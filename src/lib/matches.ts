@@ -6,8 +6,13 @@ import prisma from "@/lib/prisma";
  */
 export function calibrateScore(rawScore: number | null): number | null {
     if (rawScore === null) return null;
-    const minThreshold = 0.68;
-    const maxThreshold = 0.8;
+    // Empirically, this embedding model's cosine similarity for candidate-job
+    // pairs in production sits in ~0.58-0.83 (measured across all pairs in the
+    // DB, avg ~0.68) -- the old 0.68/0.8 band put its floor at the dataset
+    // AVERAGE, so most pairs (including genuinely relevant ones) floored to 0%
+    // and only the single best match in the whole DB approached 100%.
+    const minThreshold = 0.60;
+    const maxThreshold = 0.82;
 
     if (rawScore <= minThreshold) return 0;
     if (rawScore >= maxThreshold) return 100;
