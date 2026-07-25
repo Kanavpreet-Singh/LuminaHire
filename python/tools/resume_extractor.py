@@ -63,11 +63,11 @@ def extract_profile_urls_from_resume(resume_text: Optional[str]) -> Dict[str, Op
         result["leetcode_url"] = f"https://leetcode.com/u/{lc_match.group(1)}"
 
     gfg_match = re.search(
-        r"(?:https?://)?(?:auth\.)?(?:www\.)?geeksforgeeks\.org/user/([A-Za-z0-9_-]+)",
+        r"(?:https?://)?(?:auth\.)?(?:www\.)?geeksforgeeks\.org/(?:user|profile)/([A-Za-z0-9_%-]+)",
         resume_text, re.IGNORECASE,
     )
     if gfg_match:
-        result["gfg_url"] = f"https://www.geeksforgeeks.org/user/{gfg_match.group(1)}"
+        result["gfg_url"] = f"https://www.geeksforgeeks.org/profile/{gfg_match.group(1)}"
 
     cf_match = re.search(
         r"(?:https?://)?(?:www\.)?codeforces\.com/profile/([A-Za-z0-9_-]+)",

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { PYTHON_API_URL } from "@/lib/vetting";
+import { canBeVetted } from "@/lib/resume-required";
 
 export async function POST(req: Request) {
     try {
@@ -35,6 +36,15 @@ export async function POST(req: Request) {
 
         if (!candidate) {
             return new NextResponse("Candidate not found", { status: 404 });
+        }
+
+        // Refuse to start a run that structurally cannot produce a result. With
+        // no readable resume there are no claims to extract and no links to
+        // check, so the pipeline would emit an empty report that reads like a
+        // weak candidate rather than a missing input. See lib/resume-required.ts.
+        const resumeCheck = canBeVetted(candidate);
+        if (!resumeCheck.ok) {
+            return new NextResponse(resumeCheck.reason, { status: 400 });
         }
 
         // Check if an Application exists or create it

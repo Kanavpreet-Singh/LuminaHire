@@ -38,6 +38,13 @@ export default function ProfilePage() {
         ? name !== initialName || companyName !== initialCompanyName
         : phone !== initialPhone || resumeUrl !== initialResumeUrl || linkedinUrl !== initialLinkedinUrl || githubUrl !== initialGithubUrl;
 
+    // A candidate profile is not saveable without a resume: the whole
+    // verification pipeline reads the resume to find both the claims to check
+    // and the profile links to check them against. Mirrors the server-side
+    // rule in lib/resume-required.ts, which is the actual enforcement -- this
+    // just stops the user hitting a 400 they could have been warned about.
+    const resumeMissing = !isRecruiter && !resumeUrl;
+
     const resumeFileName = (() => {
         if (!resumeUrl) return null;
         try {
@@ -444,10 +451,17 @@ export default function ProfilePage() {
                             </>
                         )}
 
+                        {resumeMissing && (
+                            <p className="mt-4 text-xs text-amber-600 dark:text-amber-300 bg-amber-500/10 border border-amber-400/30 rounded-xl px-4 py-3 leading-relaxed">
+                                A resume is required to save your profile. LuminaHire verifies your resume against the
+                                profiles you link on it — without one, there is nothing for recruiters to check.
+                            </p>
+                        )}
+
                         <button
                             type="submit"
                             className="w-full py-3.5 mt-4 rounded-xl text-[0.95rem] font-bold text-white bg-[image:var(--gradient-primary)] border-none cursor-pointer transition-all duration-300 shadow-glow hover:not-disabled:-translate-y-px hover:not-disabled:shadow-glow-strong active:not-disabled:scale-[0.98] disabled:opacity-50 disabled:grayscale disabled:cursor-not-allowed flex justify-center items-center"
-                            disabled={saving || !hasChanges}
+                            disabled={saving || !hasChanges || resumeMissing}
                         >
                             {saving
                                 ? isRecruiter
@@ -455,7 +469,9 @@ export default function ProfilePage() {
                                     : resumeUrl !== initialResumeUrl
                                         ? "Saving & Generating Embeddings..."
                                         : "Saving Changes..."
-                                : "Save Profile"}
+                                : resumeMissing
+                                    ? "Upload a Resume to Save"
+                                    : "Save Profile"}
                         </button>
                     </form>
                 </div>

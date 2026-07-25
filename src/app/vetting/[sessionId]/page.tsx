@@ -28,6 +28,31 @@ interface EvidenceItem {
     source_type: string;
 }
 
+/** One resume claim the Claims Extractor pulled out, before it has been ruled on. */
+interface ResumeClaim {
+    id: string;
+    claim: string;
+    category?: string;
+    checkable_via?: string;
+    what_would_confirm?: string;
+    jd_relevance?: string;
+}
+
+type ClaimStatus = "VERIFIED" | "CONTRADICTED" | "UNVERIFIABLE" | "UNCHECKED";
+
+/** The Claims Judge's ruling on one claim — the product's core output. */
+interface ClaimVerdict {
+    id: string;
+    claim: string;
+    status: ClaimStatus | string;
+    rationale?: string;
+    source_url?: string;
+    category?: string;
+    jd_relevance?: string;
+}
+
+type ClaimSummary = Partial<Record<ClaimStatus, number>>;
+
 interface EvaluationData {
     dimension_scores?: {
         skills?: number;
@@ -41,6 +66,8 @@ interface EvaluationData {
     gaps_or_concerns?: string[];
     evidence?: EvidenceItem[];
     evidence_sufficient?: boolean;
+    claim_verdicts?: ClaimVerdict[];
+    claim_summary?: ClaimSummary;
 }
 
 interface QAEntry {
@@ -64,6 +91,7 @@ interface VettingSessionData {
     researchPlan: {
         target_candidate: string;
         core_skills_to_verify: string[];
+        claims?: ResumeClaim[];
         research_plan: SearchQuery[];
         company_vetting: {
             companies: string[];
@@ -93,6 +121,11 @@ interface VettingSessionData {
         narrative?: string;
         hiring_recommendation?: string;
         research_iterations?: number;
+        claim_verdicts?: ClaimVerdict[];
+        claim_summary?: ClaimSummary;
+        interview_questions_detailed?: { question: string; targets_claim_id?: string; why?: string }[];
+        /** Set when a pipeline stage failed; the report is then not a judgement on the candidate. */
+        agent_errors?: string[];
     } | null;
     logs: string[];
     application: {
@@ -111,6 +144,231 @@ interface VettingSessionData {
             requirements: string | null;
         };
     };
+}
+
+/**
+ * Renders a tool's findings text as structured content.
+ *
+ * The tools emit a deliberately simple line format — a header line, "- " facts,
+ * "  * " sub-items, inline "[https://…]" citations, and "[ALL-CAPS …]" alert
+ * banners for identity mismatches and unreadable sources. Dumping that into one
+ * `whitespace-pre-wrap` paragraph made the alerts disappear into the body text
+ * and let long repo URLs push the card into horizontal overflow.
+ */
+function FindingsText({ text }: { text: string }) {
+    if (!text?.trim()) return null;
+
+    // Leading "[SOMETHING IN CAPS ...]" blocks are alerts the Verifier prepends
+    // (identity mismatch, unreadable source). They must not read as body copy.
+    // The marker's explanatory sentence follows it on the same line, so the
+    // match runs to end-of-line — capturing only the bracket would orphan that
+    // sentence into the body. Looping (rather than a /g/ replace) also picks up
+    // a second alert, which an unanchored global replace cannot reach.
+    const alerts: string[] = [];
+    let body = text.replace(/\r/g, "");
+    for (;;) {
+        const match = body.match(/^\s*\[([A-Z][A-Z\s\-]{6,}[^\]]*)\]([^\n]*)\n*/);
+        if (!match) break;
+        alerts.push(`${match[1]}${match[2]}`.trim());
+        body = body.slice(match[0].length);
+    }
+    body = body.trim();
+
+    const lines = body.split("\n").filter((l) => l.trim());
+
+    return (
+        <div className="space-y-2 min-w-0">
+            {alerts.map((alert, idx) => (
+                <div
+                    key={idx}
+                    className="text-xs leading-relaxed rounded-lg border border-amber-400/40 bg-amber-500/10 text-amber-800 dark:text-amber-200 px-3 py-2 break-words"
+                >
+                    {alert}
+                </div>
+            ))}
+            {lines.map((line, idx) => {
+                const sub = /^\s{2,}[*•]\s?/.test(line);
+                const bullet = /^\s*-\s/.test(line);
+                const content = line.replace(/^\s*[-*•]\s?/, "").trim();
+
+                // Pull the trailing "[url]" citation out so it can wrap and be
+                // clickable instead of running off the edge as raw text.
+                const urlMatch = content.match(/\[(https?:\/\/[^\]]+)\]\s*$/);
+                const href = urlMatch?.[1];
+                const label = href ? content.slice(0, urlMatch!.index).trim() : content;
+
+                if (!bullet && !sub) {
+                    return (
+                        <p key={idx} className="text-sm font-semibold text-content-primary break-words">
+                            {label}
+                            {href && <> <a href={href} target="_blank" rel="noreferrer" className="font-normal text-brand-500 hover:underline break-all">{href.replace(/^https?:\/\//, "")}</a></>}
+                        </p>
+                    );
+                }
+                return (
+                    <div
+                        key={idx}
+                        className={`flex items-start gap-2 text-sm text-content-secondary leading-relaxed break-words ${sub ? "pl-5" : ""}`}
+                    >
+                        <span className={`shrink-0 mt-1.5 rounded-full ${sub ? "w-1 h-1 bg-content-tertiary" : "w-1.5 h-1.5 bg-brand-500/60"}`} />
+                        <span className="min-w-0 break-words">
+                            {label}
+                            {href && (
+                                <>
+                                    {" "}
+                                    <a href={href} target="_blank" rel="noreferrer" className="text-brand-500 hover:underline break-all">
+                                        {href.replace(/^https?:\/\//, "")}
+                                    </a>
+                                </>
+                            )}
+                        </span>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+/**
+ * Presentation rules for each claim status. The wording matters as much as the
+ * colour here: UNVERIFIABLE is deliberately styled as neutral (slate, not
+ * amber/red) and labelled "Not publicly checkable", because most engineering
+ * work happens in private repos and showing it as a warning would read as an
+ * accusation against candidates who have simply had normal jobs.
+ */
+const CLAIM_STATUS_STYLES: Record<string, { label: string; badge: string; dot: string; blurb: string }> = {
+    VERIFIED: {
+        label: "Verified",
+        badge: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-400/30",
+        dot: "bg-emerald-500",
+        blurb: "Confirmed against a profile the candidate linked.",
+    },
+    CONTRADICTED: {
+        label: "Contradicted",
+        badge: "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-400/30",
+        dot: "bg-rose-500",
+        blurb: "The candidate's own linked profile conflicts with this claim.",
+    },
+    UNVERIFIABLE: {
+        label: "Not publicly checkable",
+        badge: "bg-slate-500/10 text-slate-700 dark:text-slate-300 border-slate-400/30",
+        dot: "bg-slate-400",
+        blurb: "Normal for private/internal work — ask about it in the interview.",
+    },
+    UNCHECKED: {
+        label: "Could not read source",
+        badge: "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-400/30",
+        dot: "bg-amber-500",
+        blurb: "A relevant link exists but couldn't be read automatically — open it manually.",
+    },
+};
+
+const CLAIM_STATUS_ORDER = ["CONTRADICTED", "VERIFIED", "UNCHECKED", "UNVERIFIABLE"] as const;
+
+function claimStyle(status: string) {
+    return CLAIM_STATUS_STYLES[(status || "").toUpperCase()] ?? CLAIM_STATUS_STYLES.UNVERIFIABLE;
+}
+
+/**
+ * The résumé verification matrix: every claim the candidate makes, and whether
+ * their own linked sources back it up. Sorted so contradictions surface first
+ * — that's the finding a recruiter must not miss.
+ */
+function ClaimsMatrix({ verdicts, summary }: { verdicts: ClaimVerdict[]; summary?: ClaimSummary }) {
+    if (!verdicts || verdicts.length === 0) return null;
+
+    const counts: ClaimSummary =
+        summary ??
+        verdicts.reduce((acc: ClaimSummary, v) => {
+            const key = (v.status || "").toUpperCase() as ClaimStatus;
+            acc[key] = (acc[key] ?? 0) + 1;
+            return acc;
+        }, {});
+
+    const sorted = [...verdicts].sort(
+        (a, b) =>
+            CLAIM_STATUS_ORDER.indexOf((a.status || "").toUpperCase() as any) -
+            CLAIM_STATUS_ORDER.indexOf((b.status || "").toUpperCase() as any)
+    );
+
+    return (
+        <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-5 shadow-md">
+            <div>
+                <h3 className="text-lg font-bold text-content-primary flex items-center gap-2">
+                    <svg className="w-5 h-5 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Résumé Verification
+                </h3>
+                <p className="text-xs text-content-tertiary mt-1.5 leading-relaxed">
+                    Each claim on the résumé, checked against the profiles the candidate linked themselves. Claims that
+                    can&apos;t be checked publicly are <span className="font-semibold">not</span> counted against the
+                    candidate — they become interview questions.
+                </p>
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+                {CLAIM_STATUS_ORDER.map((status) => {
+                    const count = counts[status] ?? 0;
+                    if (!count) return null;
+                    const style = claimStyle(status);
+                    return (
+                        <span
+                            key={status}
+                            className={`inline-flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full border ${style.badge}`}
+                        >
+                            <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
+                            {count} {style.label}
+                        </span>
+                    );
+                })}
+            </div>
+
+            <div className="flex flex-col gap-3">
+                {sorted.map((verdict, idx) => {
+                    const style = claimStyle(verdict.status);
+                    return (
+                        <div
+                            key={`${verdict.id || idx}`}
+                            className="p-4 bg-surface-primary border border-border-default rounded-xl flex flex-col gap-2"
+                        >
+                            <div className="flex items-start justify-between gap-3 flex-wrap">
+                                <p className="text-sm text-content-primary font-medium leading-relaxed flex-1 min-w-[12rem]">
+                                    {verdict.claim}
+                                </p>
+                                <span
+                                    className={`inline-flex items-center gap-1.5 text-[0.7rem] font-bold px-2.5 py-1 rounded-full border shrink-0 ${style.badge}`}
+                                >
+                                    <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
+                                    {style.label}
+                                </span>
+                            </div>
+                            {verdict.rationale && (
+                                <p className="text-xs text-content-secondary leading-relaxed">{verdict.rationale}</p>
+                            )}
+                            <div className="flex items-center gap-3 flex-wrap">
+                                {verdict.jd_relevance && (
+                                    <span className="text-[0.65rem] uppercase tracking-wide font-bold text-content-tertiary">
+                                        {verdict.jd_relevance} relevance
+                                    </span>
+                                )}
+                                {verdict.source_url && (
+                                    <a
+                                        href={verdict.source_url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-xs text-brand-500 hover:underline font-semibold break-all"
+                                    >
+                                        View source
+                                    </a>
+                                )}
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+        </div>
+    );
 }
 
 export default function VettingSessionPage({ params }: { params: Promise<{ sessionId: string }> }) {
@@ -987,9 +1245,9 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                             ) : (
                                 <div className="space-y-3">
                                     {(sessionData.researchResults as ResearchFinding[]).map((r, idx) => (
-                                        <div key={idx} className="p-4 bg-surface-primary border border-border-default rounded-xl space-y-2">
+                                        <div key={idx} className="p-4 bg-surface-primary border border-border-default rounded-xl space-y-2 min-w-0 overflow-hidden">
                                             <div className="flex items-start justify-between gap-3 flex-wrap">
-                                                <h4 className="font-bold text-sm text-content-primary">{r.heading}</h4>
+                                                <h4 className="font-bold text-sm text-content-primary break-words min-w-0">{r.heading}</h4>
                                                 <div className="flex items-center gap-2 shrink-0">
                                                     {r.triggered_by === "human_followup" && (
                                                         <span className="px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-brand-500/10 text-brand-500 border border-brand-500/20">
@@ -1008,7 +1266,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                                     </span>
                                                 </div>
                                             </div>
-                                            <p className="text-sm text-content-secondary leading-relaxed whitespace-pre-wrap">{r.findings}</p>
+                                            <FindingsText text={r.findings} />
                                             {Array.isArray(r.urls) && r.urls.length > 0 && (
                                                 <div className="flex flex-wrap gap-2 pt-1">
                                                     {r.urls.map((u, uidx) => {
@@ -1134,6 +1392,11 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                             )}
                         </div>
 
+                        <ClaimsMatrix
+                            verdicts={sessionData.evaluation.claim_verdicts || []}
+                            summary={sessionData.evaluation.claim_summary}
+                        />
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-4 shadow-md">
                                 <h3 className="text-lg font-bold text-content-primary">Verified Skills</h3>
@@ -1252,8 +1515,53 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                                 )}
                                             </div>
                                         </div>
+                                        {(sessionData.researchPlan.claims || []).length > 0 && (
+                                            <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-4 shadow-md">
+                                                <div>
+                                                    <h3 className="text-lg font-bold text-content-primary">
+                                                        Résumé Claims ({(sessionData.researchPlan.claims || []).length})
+                                                    </h3>
+                                                    <p className="text-xs text-content-tertiary mt-1.5 leading-relaxed">
+                                                        What the candidate asserts, and which of their own linked profiles could
+                                                        settle it. Claims marked <span className="font-semibold">interview only</span> have
+                                                        no public source — normal for internal company work.
+                                                    </p>
+                                                </div>
+                                                <div className="space-y-3">
+                                                    {(sessionData.researchPlan.claims || []).map((claim, idx) => {
+                                                        const checkable = (claim.checkable_via || "NONE").toUpperCase();
+                                                        const isCheckable = checkable !== "NONE";
+                                                        return (
+                                                            <div key={claim.id || idx} className="p-4 bg-surface-primary border border-border-default rounded-xl space-y-1.5">
+                                                                <div className="flex items-start justify-between gap-3 flex-wrap">
+                                                                    <p className="text-sm text-content-primary font-medium leading-relaxed flex-1 min-w-[12rem]">
+                                                                        <span className="text-content-tertiary font-mono text-xs mr-2">{claim.id}</span>
+                                                                        {claim.claim}
+                                                                    </p>
+                                                                    <span className={`shrink-0 px-2 py-0.5 rounded-md text-[0.65rem] font-bold border uppercase ${
+                                                                        isCheckable
+                                                                            ? "bg-brand-500/10 text-brand-500 border-brand-500/20"
+                                                                            : "bg-surface-secondary text-content-tertiary border-border-default"
+                                                                    }`}>
+                                                                        {isCheckable ? checkable : "Interview only"}
+                                                                    </span>
+                                                                </div>
+                                                                {claim.what_would_confirm && (
+                                                                    <p className="text-xs text-content-secondary leading-relaxed">{claim.what_would_confirm}</p>
+                                                                )}
+                                                                {claim.jd_relevance && (
+                                                                    <span className="text-[0.65rem] uppercase tracking-wide font-bold text-content-tertiary">
+                                                                        {claim.jd_relevance} relevance
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        )}
                                         <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-4 shadow-md">
-                                            <h3 className="text-lg font-bold text-content-primary">Research Plan ({(sessionData.researchPlan.research_plan || []).length} items)</h3>
+                                            <h3 className="text-lg font-bold text-content-primary">Sources to Check ({(sessionData.researchPlan.research_plan || []).length})</h3>
                                             <div className="space-y-3">
                                                 {(sessionData.researchPlan.research_plan || []).map((item, idx) => (
                                                     <div key={idx} className="p-4 bg-surface-primary border border-border-default rounded-xl space-y-1.5">
@@ -1275,7 +1583,13 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                         </div>
                                         {(sessionData.researchPlan.company_vetting?.questions || []).length > 0 && (
                                             <div className="bg-surface-card border border-border-default rounded-3xl p-6 sm:p-8 space-y-4 shadow-md">
-                                                <h3 className="text-lg font-bold text-content-primary">Company Vetting</h3>
+                                                <div>
+                                                    <h3 className="text-lg font-bold text-content-primary">Reference-Check Questions</h3>
+                                                    <p className="text-xs text-content-tertiary mt-1.5 leading-relaxed">
+                                                        Employment history isn&apos;t publicly verifiable, so these are for you to ask
+                                                        a reference or the candidate directly — not searches.
+                                                    </p>
+                                                </div>
                                                 {(sessionData.researchPlan.company_vetting?.companies || []).length > 0 && (
                                                     <div className="flex flex-wrap gap-2">
                                                         {sessionData.researchPlan.company_vetting.companies.map((c, idx) => (
@@ -1307,9 +1621,9 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                     </div>
                                 ) : (
                                     (sessionData.researchResults as ResearchFinding[]).map((finding, idx) => (
-                                        <div key={idx} className="bg-surface-card border border-border-default rounded-2xl p-5 sm:p-6 space-y-2.5 shadow-md">
-                                            <div className="flex items-start justify-between gap-3">
-                                                <h4 className="text-sm font-bold text-content-primary">{finding.heading}</h4>
+                                        <div key={idx} className="bg-surface-card border border-border-default rounded-2xl p-5 sm:p-6 space-y-2.5 shadow-md min-w-0 overflow-hidden">
+                                            <div className="flex items-start justify-between gap-3 flex-wrap">
+                                                <h4 className="text-sm font-bold text-content-primary break-words min-w-0">{finding.heading}</h4>
                                                 <div className="flex items-center gap-2 shrink-0">
                                                     {finding.triggered_by === "human_followup" && (
                                                         <span className="px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-brand-500/10 text-brand-500 border border-brand-500/20">FOLLOW-UP</span>
@@ -1322,7 +1636,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                                     }`}>{finding.status}</span>
                                                 </div>
                                             </div>
-                                            <p className="text-sm text-content-secondary leading-relaxed whitespace-pre-wrap">{finding.findings}</p>
+                                            <FindingsText text={finding.findings} />
                                             {(finding.urls || []).length > 0 && (
                                                 <div className="flex flex-wrap gap-x-4 gap-y-1.5 pt-1">
                                                     {(finding.urls || []).map((u, uidx) => {
@@ -1474,6 +1788,10 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                 <span className={`px-4 py-1.5 rounded-full text-xs font-bold border uppercase tracking-wider ${
                                     sessionData.finalReport.verdict === "STRONG_MATCH" ? "text-emerald-600 bg-emerald-500/10 border-emerald-500/20" :
                                     sessionData.finalReport.verdict === "POTENTIAL_MATCH" ? "text-blue-600 bg-blue-500/10 border-blue-500/20" :
+                                    // INCOMPLETE means the run itself broke. It must never wear the
+                                    // REJECT colour — that would read as a judgement on the candidate
+                                    // when no judgement was actually reached.
+                                    sessionData.finalReport.verdict === "INCOMPLETE" ? "text-amber-700 bg-amber-500/10 border-amber-500/20" :
                                     "text-rose-600 bg-rose-500/10 border-rose-500/20"
                                 }`}>
                                     {sessionData.finalReport.verdict}
@@ -1531,6 +1849,30 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                 </div>
                             </div>
                         )}
+
+                        {(sessionData.finalReport.agent_errors || []).length > 0 && (
+                            <div className="bg-amber-500/10 border border-amber-400/40 rounded-3xl p-6 sm:p-8 space-y-2 shadow-md">
+                                <h3 className="text-lg font-bold text-amber-700 dark:text-amber-300">
+                                    This run did not complete
+                                </h3>
+                                <p className="text-sm text-content-secondary leading-relaxed">
+                                    One or more pipeline stages failed, so this report is incomplete. Anything missing or
+                                    scored zero below reflects the failure, <span className="font-semibold">not</span> the
+                                    candidate. Re-run the session before drawing any conclusion.
+                                </p>
+                                <ul className="space-y-1 pt-1">
+                                    {(sessionData.finalReport.agent_errors || []).map((err, idx) => (
+                                        <li key={idx} className="text-xs text-content-tertiary font-mono break-words">{err}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+
+                        {/* Résumé verification matrix — the core deliverable */}
+                        <ClaimsMatrix
+                            verdicts={sessionData.finalReport.claim_verdicts || []}
+                            summary={sessionData.finalReport.claim_summary}
+                        />
 
                         {/* Verified Skills & Concerns Gaps */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1629,13 +1971,31 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                 <svg className="w-5 h-5 text-brand-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                                 Suggested Interview Questions
                             </h3>
+                            <p className="text-xs text-content-tertiary leading-relaxed">
+                                Targeted at the claims that couldn&apos;t be settled from public sources — this is how you
+                                verify the rest of the résumé in person.
+                            </p>
                             <div className="grid grid-cols-1 gap-3">
-                                {sessionData.finalReport.interview_questions.map((q, idx) => (
-                                    <div key={idx} className="p-4 bg-surface-primary border border-border-default rounded-xl flex items-start gap-3">
-                                        <span className="text-brand-500 font-extrabold text-sm shrink-0">Q{idx + 1}.</span>
-                                        <p className="text-sm text-content-secondary leading-relaxed">{q}</p>
-                                    </div>
-                                ))}
+                                {sessionData.finalReport.interview_questions.map((q, idx) => {
+                                    // The structured list carries the claim linkage; the flat
+                                    // string list is what older sessions stored, so fall back
+                                    // to index-matching rather than dropping the extra context.
+                                    const detail = sessionData.finalReport?.interview_questions_detailed?.[idx];
+                                    return (
+                                        <div key={idx} className="p-4 bg-surface-primary border border-border-default rounded-xl flex items-start gap-3">
+                                            <span className="text-brand-500 font-extrabold text-sm shrink-0">Q{idx + 1}.</span>
+                                            <div className="flex flex-col gap-1.5">
+                                                <p className="text-sm text-content-secondary leading-relaxed">{q}</p>
+                                                {detail?.why && (
+                                                    <p className="text-[0.7rem] text-content-tertiary italic leading-relaxed">
+                                                        {detail.targets_claim_id ? `Probes claim ${detail.targets_claim_id} — ` : ""}
+                                                        {detail.why}
+                                                    </p>
+                                                )}
+                                            </div>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         </div>
 

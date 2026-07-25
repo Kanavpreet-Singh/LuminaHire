@@ -13,6 +13,20 @@ interface BatchMember {
     batchRank: number | null;
 }
 
+interface RankingMatch {
+    opponent: string;
+    opponent_name: string;
+    outcome: string; // a sessionId (that match's winner) or "tie"
+    rationale: string | null;
+}
+
+interface RankingDetail {
+    name: string;
+    wins: number;
+    matches_played: number;
+    matches: RankingMatch[];
+}
+
 interface BatchData {
     id: string;
     jobId: string;
@@ -26,6 +40,10 @@ interface BatchData {
     skippedCount: number;
     errorMessage: string | null;
     finalizedAt: string | null;
+    // Pairwise tournament results for the top-by-absolute-score shortlist
+    // (see maybeFinalizeBatch in src/lib/vetting.ts) -- null if the batch
+    // predates this or had too few COMPLETED members to run one.
+    rankingDetails: Record<string, RankingDetail> | null;
 }
 
 export default function BatchResultsPage({ params }: { params: Promise<{ batchId: string }> }) {
@@ -166,29 +184,40 @@ export default function BatchResultsPage({ params }: { params: Promise<{ batchId
                             </div>
                         ) : (
                             <div className="space-y-3">
-                                {winners.map((m) => (
-                                    <Link
-                                        key={m.sessionId}
-                                        href={`/vetting/${m.sessionId}`}
-                                        className="flex items-center justify-between gap-4 p-5 bg-surface-card border border-emerald-500/20 rounded-2xl hover:border-emerald-500/50 transition-all shadow-md no-underline"
-                                    >
-                                        <div className="flex items-center gap-4 min-w-0">
-                                            <div className="w-10 h-10 rounded-full bg-emerald-500 text-white flex items-center justify-center text-sm font-black shrink-0">
-                                                #{m.batchRank}
+                                {winners.map((m) => {
+                                    const record = batch.rankingDetails?.[m.sessionId];
+                                    return (
+                                        <Link
+                                            key={m.sessionId}
+                                            href={`/vetting/${m.sessionId}`}
+                                            className="flex items-center justify-between gap-4 p-5 bg-surface-card border border-emerald-500/20 rounded-2xl hover:border-emerald-500/50 transition-all shadow-md no-underline"
+                                        >
+                                            <div className="flex items-center gap-4 min-w-0">
+                                                <div className="w-10 h-10 rounded-full bg-emerald-500 text-white flex items-center justify-center text-sm font-black shrink-0">
+                                                    #{m.batchRank}
+                                                </div>
+                                                <div className="min-w-0">
+                                                    <h3 className="font-bold text-content-primary truncate">{m.candidateName}</h3>
+                                                    <p className="text-xs text-content-tertiary truncate">{m.candidateEmail}</p>
+                                                </div>
                                             </div>
-                                            <div className="min-w-0">
-                                                <h3 className="font-bold text-content-primary truncate">{m.candidateName}</h3>
-                                                <p className="text-xs text-content-tertiary truncate">{m.candidateEmail}</p>
+                                            <div className="flex items-center gap-3 shrink-0">
+                                                {record && (
+                                                    <span
+                                                        className="hidden sm:inline px-2.5 py-1 rounded-full text-[0.65rem] font-bold border border-brand-500/20 bg-brand-500/5 text-brand-400"
+                                                        title="Head-to-head record from the pairwise ranking tournament among the top candidates"
+                                                    >
+                                                        Won {record.wins}/{record.matches_played} head-to-head
+                                                    </span>
+                                                )}
+                                                {m.verdict && (
+                                                    <span className="hidden sm:inline px-2.5 py-1 rounded-full text-[0.65rem] font-bold border border-border-default bg-surface-secondary text-content-tertiary uppercase">{m.verdict}</span>
+                                                )}
+                                                <span className="text-lg font-black text-emerald-500">{m.overallFitPercentage}%</span>
                                             </div>
-                                        </div>
-                                        <div className="flex items-center gap-3 shrink-0">
-                                            {m.verdict && (
-                                                <span className="hidden sm:inline px-2.5 py-1 rounded-full text-[0.65rem] font-bold border border-border-default bg-surface-secondary text-content-tertiary uppercase">{m.verdict}</span>
-                                            )}
-                                            <span className="text-lg font-black text-emerald-500">{m.overallFitPercentage}%</span>
-                                        </div>
-                                    </Link>
-                                ))}
+                                        </Link>
+                                    );
+                                })}
                             </div>
                         )}
                     </div>

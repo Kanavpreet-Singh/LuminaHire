@@ -36,13 +36,19 @@ def fetch_and_summarize_webpage(url: str, max_chars: int = MAX_CHARS) -> Dict[st
     except ImportError:
         return {"findings": f"Found link ({url}) but the page could not be scraped (missing bs4 dependency).", "urls": [{"url": url, "title": ""}]}
 
+    # `error` marks "the source could not be read at all", as opposed to "the
+    # source was read and had nothing useful". The caller maps it to an
+    # UNREACHABLE status so the Claims Judge never mistakes a failed fetch for
+    # evidence -- these branches still return the URL (it remains valid
+    # evidence that the profile exists), and without this flag that lone URL
+    # made a total network failure look like a successful check.
     try:
         resp = requests.get(url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
     except requests.exceptions.RequestException as e:
-        return {"findings": f"Could not reach {url}: {e}", "urls": [{"url": url, "title": ""}]}
+        return {"findings": f"Could not reach {url}: {e}", "urls": [{"url": url, "title": ""}], "error": "unreachable"}
 
     if resp.status_code >= 400:
-        return {"findings": f"{url} returned HTTP {resp.status_code}.", "urls": [{"url": url, "title": ""}]}
+        return {"findings": f"{url} returned HTTP {resp.status_code}.", "urls": [{"url": url, "title": ""}], "error": f"http_{resp.status_code}"}
 
     try:
         soup = BeautifulSoup(resp.text, "html.parser")
@@ -51,7 +57,7 @@ def fetch_and_summarize_webpage(url: str, max_chars: int = MAX_CHARS) -> Dict[st
         title = (soup.title.string.strip() if soup.title and soup.title.string else "") or ""
         text = " ".join(soup.get_text(separator=" ", strip=True).split())
     except Exception as e:
-        return {"findings": f"Fetched {url} but could not parse it: {e}", "urls": [{"url": url, "title": ""}]}
+        return {"findings": f"Fetched {url} but could not parse it: {e}", "urls": [{"url": url, "title": ""}], "error": "unparsable"}
 
     if not text or len(text) < 40:
         return {

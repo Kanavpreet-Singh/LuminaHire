@@ -203,6 +203,14 @@ model VettingBatch {
   // once by the finalizer; mirror of VettingSession.batchRank for a cheap read.
   topSessionIds         Json?
 
+  // Pairwise round-robin tournament results for the top-by-absolute-score
+  // shortlist (see python/agents.py's run_pairwise_tournament and
+  // maybeFinalizeBatch in src/lib/vetting.ts). Shape: {sessionId: {name, wins,
+  // matches_played, matches: [{opponent, opponent_name, outcome, rationale}]}}.
+  // Null for batches finalized before this existed, or with too few COMPLETED
+  // members to run a tournament (fewer than 2).
+  rankingDetails        Json?
+
   finalizedAt           DateTime?
   errorMessage          String?  @db.Text
 

@@ -1,8 +1,10 @@
 # LuminaHire
 
-**An agentic hiring platform that researches candidates instead of keyword-matching them.**
+**An agentic hiring platform that verifies a résumé instead of keyword-matching it.**
 
-LuminaHire replaces resume keyword screening with a supervised multi-agent pipeline. For every candidate it plans what to verify, gathers evidence from ~15 public sources (GitHub, LeetCode, Codeforces, LinkedIn, Medium, arXiv, npm, personal sites…), scores the candidate against the job description with citations, and writes a recruiter-facing hiring memo — pausing at human checkpoints so a recruiter approves each stage before the next one runs.
+LuminaHire replaces resume keyword screening with a supervised multi-agent pipeline. For every candidate it extracts the checkable claims off their résumé, tests each one against the profiles that candidate linked on that same résumé (~15 sources: GitHub, LeetCode, Codeforces, LinkedIn, Medium, arXiv, npm, personal sites…), rules every claim verified / contradicted / unverifiable, and writes a recruiter-facing hiring memo — pausing at human checkpoints so a recruiter approves each stage before the next one runs.
+
+It is deliberately **not** an internet research tool: it never searches the open web for a candidate by name. [Why that matters](#why-this-exists).
 
 Production: [luminahire.tech](https://luminahire.tech) · Stack: Next.js 16 · React 19 · FastAPI · LangGraph · PostgreSQL + pgvector
 
@@ -34,11 +36,44 @@ Production: [luminahire.tech](https://luminahire.tech) · Stack: Next.js 16 · R
 
 Conventional ATS screening reads one document the candidate wrote about themselves and matches strings against it. That optimizes for resume-writing skill, not engineering skill, and it cannot distinguish a claimed skill from a demonstrated one.
 
-LuminaHire's premise is that for most software candidates the evidence is already public — it just isn't collected. So the system does three things a keyword filter can't:
+LuminaHire's premise is that a résumé is a set of claims, and for most software candidates a good number of them are already checkable against links the candidate put on the résumé themselves. So the system does three things a keyword filter can't:
 
-1. **Verifies claims against primary sources.** Every score is backed by `{claim, source_url, source_type}` evidence items. A skill the candidate listed but that nothing public supports is reported as resume-only, not as verified.
-2. **Keeps a human in the loop at every stage.** The recruiter edits the research plan before it runs, reviews the raw findings before they're scored, and reviews the scores before the memo is written. The agents propose; the recruiter decides.
+1. **Rules on every claim against primary sources.** Each claim comes back VERIFIED, CONTRADICTED, UNVERIFIABLE, or UNCHECKED, backed by `{claim, source_url, source_type}` evidence. A skill the candidate listed that nothing supports is reported as resume-only, not as verified.
+2. **Keeps a human in the loop at every stage.** The recruiter edits the plan before it runs, reviews the raw findings before they're scored, and reviews the scores before the memo is written. The agents propose; the recruiter decides.
 3. **Ranks candidates against each other, not against a rubric in isolation.** Absolute LLM scores from independent runs aren't calibrated with one another, so batch mode re-ranks its shortlist through a pairwise round-robin tournament (see [Batch mode](#batch-mode-the-hiring-committee)).
+
+### Why it never searches the web for a candidate
+
+An earlier version of this pipeline did search the open web per candidate. That was removed, because it fails in two ways no amount of prompt engineering fixes:
+
+**It finds the wrong person.** Searching `"Priya Sharma" backend engineer` returns pages about many different Priya Sharmas, and nothing in the results distinguishes the candidate from a stranger with the same name. A recruiter shown someone else's GitHub or publications has been *actively misled* — strictly worse than being shown nothing, because they now have false confidence instead of a known gap.
+
+**There is usually nothing to find.** Ordinary engineers aren't public figures, and companies don't publish per-employee breakdowns of who built what. "What did they actually own at Acme?" has no public answer, so asking burns quota and invites the model to pad thin results into something that reads like evidence.
+
+Real recruiters don't do this either — they read the résumé and click the links on it. That's the workflow this automates, plus the part humans can't do at scale: systematically checking whether each claim matches what those links show. The rule that follows:
+
+> **Every source LuminaHire reads was supplied by the candidate** — a profile link on their résumé, or a specific artifact it names (a paper title, a package name). Nothing is discovered by searching for the candidate's name.
+
+Anything unreachable from a candidate-supplied source is reported `UNVERIFIABLE` and routed to the interview — never guessed at, and never held against the candidate.
+
+**One deliberate exception:** at the research checkpoint a recruiter can type a free-text instruction that may run an open-web search. The conditions that make search dangerous don't hold there — a human asked for that specific lookup and reads the raw result — and those findings are always labelled *unconfirmed attribution* so they can't be mistaken for verified fact.
+
+### What a ruling means
+
+| Status | Meaning | Effect on score |
+|---|---|---|
+| **VERIFIED** | A candidate-supplied source directly supports the claim. | Positive — what the recruiter can bank on. |
+| **CONTRADICTED** | Their own linked profile conflicts with it (résumé says 800 problems solved, profile shows 200). | Negative, surfaced as a red flag. The highest-value finding the system produces. |
+| **UNVERIFIABLE** | No candidate-supplied source could settle it. Normal for internal, proprietary, or team work. | **None.** Explicitly neutral. |
+| **UNCHECKED** | A relevant source existed but couldn't be read this run. | **None.** The link is surfaced to check manually. |
+
+**Why `UNVERIFIABLE` never costs a candidate points.** Most good engineers do their best work inside private company repositories. Penalizing claims the system can't verify would systematically punish candidates for having had normal jobs and reward those who happen to work in public — a scoring bug disguised as rigor. The status describes the *public visibility of the work*, not the candidate's honesty, so those claims are scored exactly as a recruiter would score a résumé with no links at all, and each becomes an interview question instead. That conversion is the point: "we couldn't verify this" becomes *"walk me through the caching layer you built"* — a question only someone who did the work answers well.
+
+### Identity cross-checking
+
+Even a candidate-supplied link can point at the wrong person: résumés get copy-pasted from templates and links get typo'd. Whenever a profile publishes a real name (GitHub, LeetCode, GeeksforGeeks, Codeforces) it is matched against the résumé name *before* any of its data is trusted; a mismatch is flagged and that source is excluded from the evaluation rather than silently absorbed.
+
+The matcher (`python/verification.py`) is lenient about the shape of a name and strict only about shared content — word order, dropped middle names, missing accents and first-name-only profiles all still match, while two names with nothing in common do not. It also skips platforms that return the handle as the display name (LeetCode's default when no real name is set), since comparing a placeholder would manufacture a false mismatch.
 
 ---
 
@@ -58,7 +93,7 @@ Skills can be added or removed, research items reordered or deleted, and each it
 
 ![Editable focus-skills chips and the ordered research plan with per-item source tags](public/images/Screenshot%202026-07-22%20145113.png)
 
-Company vetting is deliberately conservative: at most one broad, checkable question per company. Most candidates aren't public figures, so asking a web search "what technologies did they use at company X" produces confident-sounding noise. Asking "does this company exist and is the claimed role plausible" produces a checkable answer.
+Employment history gets no search at all, because none is possible: companies don't publish who built what. Instead the extractor produces **reference-check questions** — for a human to ask a human, about scope and ownership — which flow through to the final memo's interview questions rather than being handed to a search engine that would return confident-sounding noise.
 
 ![Company vetting questions with the Approve Planner & Start Research action](public/images/Screenshot%202026-07-22%20145120.png)
 
@@ -182,27 +217,29 @@ stateDiagram-v2
 
 | Agent | Role | Structured output (Pydantic) |
 |---|---|---|
-| **Planner** | Reads JD + resume; decides what must be verified and where to look. | `PlannerOutputSchema` — `core_skills_to_verify`, ordered `research_plan[]`, `company_vetting` |
-| **Researcher** | Pure tool executor — no judgment about the candidate, only about which tools to call. Runs the plan, or the evaluator's follow-up requests. | `research_results[]` — `{heading, source, findings, status, urls, iteration}` |
-| **Evaluator** | Scores five dimensions from the gathered evidence, cites sources, decides whether it has enough to be confident. | `EvaluatorOutputSchema` — `dimension_scores`, `overall_fit_percentage`, `verified_skills`, `gaps_or_concerns`, `evidence[]`, `evidence_sufficient`, `additional_research_requests[]` |
-| **Report Writer** | Turns an approved evaluation into a recruiter-facing memo. | `ReportWriterOutputSchema` — `summary`, `narrative`, `red_flags`, `interview_questions`, `hiring_recommendation`, `verdict` |
+| **Claims Extractor** (`planner`) | Reads JD + résumé and enumerates the candidate's *checkable claims*, tagging each with which candidate-supplied source could settle it — or `NONE`, the normal answer for internal work. Prefers quantified, falsifiable claims, since that's where résumé inflation shows. | `PlannerOutputSchema` — `claims[]`, `core_skills_to_verify`, ordered `research_plan[]`, `company_vetting` (reference-check questions, not searches) |
+| **Verifier** (`researcher`) | Pure tool executor — no judgment about the candidate. Fetches every linked profile deterministically, cross-checks identity on each, then makes only two judgment calls: which claimed technology to test against the candidate's own repos, and which named publication to verify. | `research_results[]` — `{heading, source, findings, status, urls, identity_check, iteration}` |
+| **Claims Judge** (`evaluator`) | Rules every extracted claim against the cited evidence and scores five dimensions. | `EvaluatorOutputSchema` — `claim_verdicts[]`, `claim_summary`, `dimension_scores`, `overall_fit_percentage`, `verified_skills`, `gaps_or_concerns`, `evidence[]`, `evidence_sufficient`, `additional_research_requests[]` |
+| **Report Writer** | Turns an approved evaluation into a recruiter-facing memo, with one targeted interview question per claim that couldn't be settled publicly. | `ReportWriterOutputSchema` — `summary`, `narrative`, `red_flags`, `interview_questions[]`, `hiring_recommendation`, `verdict` |
 
 Two more LLM entry points sit outside the graph: **Q&A** (`answer_qa_question`) answers free-text recruiter questions grounded only in the session's accumulated context, and **pairwise comparison** (`run_pairwise_tournament`) powers batch re-ranking.
 
 **Design decisions worth calling out:**
 
-- **The Researcher makes no judgments about the candidate.** It gathers; the Evaluator judges. Keeping retrieval and assessment in separate agents with separate contexts means the thing collecting evidence has no incentive to collect evidence supporting a conclusion it already reached.
-- **The evaluator→researcher loop is bounded** at `MAX_RESEARCH_ITERATIONS = 3` (one initial pass + at most two follow-ups). An agent that can always ask for more evidence will.
-- **Every LLM call is schema-constrained.** Each agent returns a validated Pydantic model, so a malformed generation fails loudly at the boundary rather than propagating a half-parsed dict into the database.
+- **The Verifier makes no judgments about the candidate.** It gathers; the Claims Judge judges. Keeping retrieval and assessment in separate agents with separate contexts means the thing collecting evidence has no incentive to collect evidence supporting a conclusion it already reached.
+- **The evaluator→researcher loop is bounded** at `MAX_RESEARCH_ITERATIONS = 3` (one initial pass + at most two follow-ups). An agent that can always ask for more evidence will. It also won't loop merely because claims are `UNVERIFIABLE` — re-running cannot make private work public.
+- **Numeric claims are settled by arithmetic, not by the model's label.** Résumé figures are thresholds ("750+", "1000+ across two sites"), so the only question is `observed >= claimed`. The judge emits `claimed_value`/`observed_value` and Python does the comparison. This exists because the model reliably produced rationales reading *"1113 >= 1000 → VERIFIED"* attached to a status of `CONTRADICTED` — correct reasoning, wrong label, and a candidate publicly accused of inflating a figure they had actually beaten. A false `CONTRADICTED` is the most damaging output this system can produce, so it is never left to a label.
+- **Missing rulings fail neutral.** Any extracted claim the judge omits is backfilled `UNVERIFIABLE`, and a crashed agent surfaces as verdict `INCOMPLETE` with the error attached — never as a silent 0% that reads like a weak candidate.
+- **Every LLM call is schema-constrained.** Each agent returns a validated Pydantic model, so a malformed generation fails loudly at the boundary rather than propagating a half-parsed dict into the database. Only genuinely load-bearing fields are required: an optional annotation must never be able to discard an otherwise complete report.
 - **`MOCK_AI_RESPONSES` defaults to on.** The whole pipeline runs end-to-end on deterministic fixtures with zero API keys, which makes UI work and state-machine debugging free and fast. Set `MOCK_AI_RESPONSES=0` for real runs.
 
 ---
 
 ## The tool catalog (the ReAct guardrail)
 
-`python/tools/catalog.py` is the single source of truth for what the Researcher may do. It exists to solve a specific failure mode: given an open web-search tool, an LLM will reach for it constantly, produce plausible-sounding results about the wrong person, and burn quota doing it.
+`python/tools/catalog.py` is the single source of truth for what the Verifier may do. It exists to solve a specific failure mode: given an open web-search tool, an LLM will reach for it constantly, produce plausible-sounding results about the wrong person, and burn quota doing it.
 
-The catalog's answer is a **closed, curated tool set with exactly one deliberately generic fallback**:
+The catalog's answer is a **closed, curated tool set in which every entry reads a source the candidate supplied**. `web_search_tool` is deliberately absent from this roster — it is offered only on the HITL follow-up path (`FOLLOWUP_TOOL_DECLARATIONS`), where a human asked for that specific lookup and reads the result:
 
 | Tool | Source | Selected by |
 |---|---|---|
@@ -218,16 +255,19 @@ The catalog's answer is a **closed, curated tool set with exactly one deliberate
 | `get_stackoverflow_data` | Stack Overflow | Deterministic |
 | `get_npm_packages` | npm registry | Deterministic |
 | `get_portfolio_website_data` | Candidate's personal site | Deterministic |
-| `get_medium_articles` | Medium (name-matched) | LLM judgment |
-| `get_scholar_papers` | Semantic Scholar (name-matched) | LLM judgment |
-| `get_arxiv_papers` | arXiv (name-matched) | LLM judgment |
-| `web_search_tool` | Gemini Google-Search grounding, Tavily fallback | LLM judgment, **max 2 calls/pass** |
+| `get_medium_articles` | Medium | LLM judgment |
+| `get_scholar_papers` | Semantic Scholar — **verified by exact paper title**, confirming the candidate is among the authors | LLM judgment |
+| `get_arxiv_papers` | arXiv — **verified by exact paper title** | LLM judgment |
 
-Three mechanisms do the actual guarding:
+Five mechanisms do the actual guarding:
 
-1. **Deterministic dispatch for unambiguous calls.** Whether a candidate has a real GitHub URL is ground truth, not a judgment call — so the Researcher calls every known-URL platform directly and only hands the LLM the genuinely ambiguous choices (`AMBIGUOUS_TOOL_DECLARATIONS`). Smaller tool-selection models otherwise reach for generic web search even when a specific link is right there.
-2. **URL arguments from the model are never trusted.** `dispatch()` overrides whatever URL the model produced with the candidate's real, resume-extracted URL for that platform, and returns a skip if none exists. A hallucinated call cannot cause a fetch of a made-up profile.
-3. **Hard caps.** `MAX_TOOL_CALLS_PER_PASS = 10`, at most 2 web searches per pass, bounded GitHub pagination (up to 300 repos scanned, 12 language lookups).
+1. **No name-based discovery.** Every tool above reads a link the candidate gave, or looks up an artifact their résumé names by title. Scholar and arXiv previously searched by *author name* and reported the first hit as the candidate's — meaning anyone sharing a name with a published academic silently inherited a stranger's publication record. They now verify a specific title and check the real author list; a bare name lookup is still possible but is reported as `ATTRIBUTION UNCONFIRMED`, never as fact.
+2. **Deterministic dispatch for unambiguous calls.** Whether a candidate has a real GitHub URL is ground truth, not a judgment call — so the Verifier calls every known-URL platform directly and only hands the LLM the genuinely ambiguous choices (`AMBIGUOUS_TOOL_DECLARATIONS`: which technology to test, which publication to verify). Smaller tool-selection models otherwise reach for generic web search even when a specific link is right there.
+3. **URL arguments from the model are never trusted.** `dispatch()` overrides whatever URL the model produced with the candidate's real, resume-extracted URL for that platform, and returns a skip if none exists. A hallucinated call cannot cause a fetch of a made-up profile.
+4. **Identity cross-check on every named profile.** See [Why this exists](#why-this-exists) — a mistyped link is the one remaining way a candidate-supplied source can surface the wrong person's data.
+5. **Hard caps.** `MAX_TOOL_CALLS_PER_PASS = 10`, bounded GitHub pagination (up to 300 repos scanned, 12 language lookups), and a bounded LLM client timeout/retry budget so a network outage fails fast instead of stalling a run for minutes.
+
+**A failed fetch is not a finding.** These tools return the profile URL as evidence even when the fetch fails, which once meant a network outage was recorded as a successful check. Tools now set an `error` flag that the Verifier maps to status `UNREACHABLE`, and the finding text tells the Judge explicitly not to treat it as evidence either way.
 
 **Where the URLs come from.** LinkedIn and GitHub prefer the candidate's profile fields; everything else is extracted from the resume — including **real PDF link annotations**, since resumes routinely display "GitHub" as anchor text with the URL reachable only as a clickable hyperlink that plain text extraction misses entirely (`_extract_pdf_hyperlinks` in `main.py`).
 
@@ -317,6 +357,8 @@ CASE WHEN j.embedding IS NOT NULL AND c.embedding IS NOT NULL
 **Raw cosine similarity is calibrated before it's shown.** Measured across candidate–job pairs in this database, the model's similarities cluster in roughly 0.58–0.83 with a mean near 0.68. Displaying that directly is useless — everything looks like a 70% match. `calibrateScore()` maps `[0.60, 0.82] → [0, 100]` linearly with clamping, which spreads the actual working range across the full scale.
 
 **Resume ingestion** (`POST /process-resume`) downloads the PDF, extracts text with LangChain's `PyPDFLoader`, falls back to **Gemini multimodal OCR** for scanned/image-only PDFs, appends real PDF hyperlink annotations, then embeds — returning text, vector, page count, and whether OCR was needed.
+
+**A résumé is mandatory.** Candidate profiles cannot be saved, matched, or vetted without an uploaded, text-extractable résumé (`src/lib/resume-required.ts`, enforced in both the API and the UI). It isn't optional metadata — it is the pipeline's input: no résumé means no claims to extract and no links to check, so a run would emit an empty report that reads like a weak candidate rather than a missing input. Replacing a résumé is allowed; removing one is not.
 
 ---
 
@@ -438,7 +480,7 @@ All `*-async` endpoints return `202` immediately and reject a duplicate in-fligh
 
 **Agents** — Python 3.11, FastAPI + Uvicorn, LangGraph `StateGraph`, LangChain community document loaders, Pydantic v2 for structured output, `pypdf`, BeautifulSoup.
 
-**LLM providers** — a pluggable `llm_client` with one schema-constrained contract across an OpenAI-compatible endpoint, Google Gemini (native `response_schema`), Groq (JSON mode), and local Ollama for offline dev. The failover chain is preserved in-source and selected by which path `structured_generate` returns. Web search is Gemini Google-Search grounding with a Tavily fallback, because grounding is Gemini-only and needs a degradation path during a quota outage.
+**LLM providers** — a pluggable `llm_client` with one schema-constrained contract across an OpenAI-compatible endpoint, Google Gemini (native `response_schema`), Groq (JSON mode), and local Ollama for offline dev. The failover chain is preserved in-source and selected by which path `structured_generate` returns. The OpenAI-compatible client runs with a bounded timeout and retry budget, because the SDK's generous defaults once turned a DNS failure into a 22-minute planner call with the whole run blocked behind it. Open-web search (recruiter-directed follow-ups only) uses Tavily, with Gemini Google-Search grounding preserved in-source behind it.
 
 **Ops** — Docker multi-stage builds, Docker Compose, GitHub Actions → GHCR → EC2 over SSH, nginx reverse proxy, Let's Encrypt, Langfuse.
 
@@ -528,7 +570,8 @@ Brings up both services with `PYTHON_API_URL` already wired to the internal `pyt
 | `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL` | optional | OpenAI-compatible reasoning + tool selection |
 | `GROQ_API_KEY` / `GROQ_MODEL` | optional | Failover provider during Gemini quota outages |
 | `GITHUB_TOKEN` | recommended | Raises GitHub's rate limit from 60/hr to 5000/hr |
-| `TAVILY_API_KEY` | optional | Web-search fallback when grounding is unavailable |
+| `TAVILY_API_KEY` | optional | Open-web search for recruiter-directed follow-ups only; the automated pipeline never uses it |
+| `OPENAI_TIMEOUT` / `OPENAI_MAX_RETRIES` | optional | Per-request ceiling and retry budget (defaults `90`s / `2`) |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | optional | Tracing (no-ops entirely when unset) |
 | `LLM_PROVIDER` / `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | optional | Local Ollama for offline development |
 
@@ -591,6 +634,7 @@ LuminaHire/
 │   ├── research_agent.py        HITL guided-research agent
 │   ├── registry.py              In-memory run-state registry
 │   ├── llm_client.py            Structured generation + provider failover
+│   ├── verification.py          Identity matching + claim-status vocabulary
 │   ├── tracing.py               Langfuse spans + cost accounting
 │   └── tools/
 │       ├── catalog.py           Tool declarations, dispatch, guardrails
@@ -599,6 +643,7 @@ LuminaHire/
 │                                CodeChef, LinkedIn, Medium, Dev.to,
 │                                Stack Overflow, npm, Scholar, arXiv,
 │                                portfolio, web search
+├── scripts/                     DB inspection + seed-data cleanup helpers
 ├── prisma/
 │   ├── schema.prisma            Models + pgvector columns
 │   └── migrations/              SQL migration history

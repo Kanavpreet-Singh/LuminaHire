@@ -183,6 +183,22 @@ def fetch_github_bundle(username: str) -> Dict[str, Any]:
     return bundle
 
 
+def _oneline(value: Optional[str], fallback: str = "N/A") -> str:
+    """
+    Flatten a free-text field to a single line.
+
+    Bios and repo descriptions are user-authored and routinely contain
+    newlines (GitHub stores them verbatim, CRLF included). Interpolated raw
+    into a line-per-fact summary, one embedded newline splits a "- Name: ...;
+    Bio: ...; Company: ..." line in half, and the UI -- which renders findings
+    with whitespace preserved -- shows the break as a real one.
+    """
+    if not value:
+        return fallback
+    collapsed = " ".join(str(value).split())
+    return collapsed or fallback
+
+
 def summarize_github_bundle(bundle: Dict[str, Any]) -> str:
     """Turn a GitHub bundle into a compact factual string for the research findings."""
     if bundle.get("error"):
@@ -191,8 +207,8 @@ def summarize_github_bundle(bundle: Dict[str, Any]) -> str:
     p = bundle.get("profile", {})
     lines = [
         f"GitHub @{bundle.get('username')} ({p.get('html_url')}):",
-        f"- Name: {p.get('name') or 'N/A'}; Bio: {p.get('bio') or 'N/A'}; "
-        f"Company: {p.get('company') or 'N/A'}; Location: {p.get('location') or 'N/A'}",
+        f"- Name: {_oneline(p.get('name'))}; Bio: {_oneline(p.get('bio'))}; "
+        f"Company: {_oneline(p.get('company'))}; Location: {_oneline(p.get('location'))}",
         f"- Public repos: {p.get('public_repos')}; Followers: {p.get('followers')}; "
         f"Member since: {p.get('created_at')}",
     ]
@@ -217,7 +233,8 @@ def summarize_github_bundle(bundle: Dict[str, Any]) -> str:
         for r in repos_by_size[:6]:
             lines.append(
                 f"  * {r.get('name')} ({r.get('language') or 'N/A'}, {r.get('size_kb', 0)} KB, "
-                f"{r.get('stars', 0)} stars) - {r.get('description') or 'no description'} [{r.get('html_url')}]"
+                f"{r.get('stars', 0)} stars) - {_oneline(r.get('description'), 'no description')} "
+                f"[{r.get('html_url')}]"
             )
     activity = bundle.get("recent_activity") or {}
     if activity:
@@ -243,7 +260,20 @@ def get_github_data(username_or_url: str) -> Dict[str, Any]:
     if not username:
         return {"findings": "No valid GitHub username/URL provided.", "urls": []}
     bundle = fetch_github_bundle(username)
-    return {"findings": summarize_github_bundle(bundle), "urls": [{"url": u, "title": ""} for u in github_repo_urls(bundle)]}
+    result: Dict[str, Any] = {
+        "findings": summarize_github_bundle(bundle),
+        "urls": [{"url": u, "title": ""} for u in github_repo_urls(bundle)],
+        # Identity block: lets the researcher cross-check that this profile
+        # actually belongs to the candidate before trusting its data. See
+        # verification.match_names().
+        "identity": {"name": (bundle.get("profile") or {}).get("name"), "handle": username},
+    }
+    # Rate limits and network failures mean "we couldn't look", not "they have
+    # no repos" -- flag it so the caller reports UNREACHABLE rather than
+    # letting the Evaluator read an empty result as a thin GitHub presence.
+    if bundle.get("error"):
+        result["error"] = bundle["error"]
+    return result
 
 
 def get_github_topic_data(username_or_url: str, topic: str) -> Dict[str, Any]:

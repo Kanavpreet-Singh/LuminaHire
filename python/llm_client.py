@@ -40,6 +40,11 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 # provider-prefixed in their catalog (e.g. "openai/gpt-4o-mini").
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://aicredits.in/v1")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "openai/gpt-4o-mini")
+# Per-request ceiling and retry budget for the OpenAI-compatible client. A
+# healthy structured call returns in <15s; anything past this is a stuck
+# connection, not a slow answer.
+OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "90"))
+OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
 
 # Local-testing provider toggle: unset/"gemini" (default) keeps the existing
 # Gemini->Groq real-mode path untouched. "ollama" routes every structured
@@ -83,7 +88,17 @@ def _get_openai():
         if not key:
             return None
         from openai import OpenAI
-        _openai_client = OpenAI(base_url=OPENAI_BASE_URL, api_key=key)
+        _openai_client = OpenAI(
+            base_url=OPENAI_BASE_URL,
+            api_key=key,
+            # Bounded, or a network outage turns into a multi-minute hang per
+            # call: the SDK's defaults (600s timeout, 2 retries with backoff)
+            # once stretched a single planner call to 22 minutes during a DNS
+            # failure, with the whole vetting run blocked behind it. Failing
+            # fast lets the caller's fallback path actually run.
+            timeout=OPENAI_TIMEOUT,
+            max_retries=OPENAI_MAX_RETRIES,
+        )
     return _openai_client
 
 
