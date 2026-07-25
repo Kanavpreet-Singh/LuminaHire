@@ -40,7 +40,15 @@ export interface JobMatch {
 /**
  * Rank all candidates against a job by pgvector cosine similarity, calibrated to
  * 0-100. Shared by the recruiter "AI Matches" modal and the batch Hiring
- * Committee. Only candidates and jobs with embeddings participate.
+ * Committee.
+ *
+ * Only candidates with a usable resume participate. An embedding can only
+ * exist as a product of resume processing, so requiring one already implies a
+ * resume -- but the resumeUrl/resumeText conditions are stated explicitly
+ * because this is a hard product rule (see lib/resume-required.ts), not an
+ * incidental consequence of how embeddings happen to be produced today.
+ * Without a resume the verification pipeline has no claims to check and no
+ * links to check them against.
  */
 export async function getJobMatches(jobId: string): Promise<JobMatch[]> {
     const matches = await prisma.$queryRaw<any[]>`
@@ -69,6 +77,8 @@ export async function getJobMatches(jobId: string): Promise<JobMatch[]> {
         WHERE j.id = ${jobId}
           AND c.embedding IS NOT NULL
           AND j.embedding IS NOT NULL
+          AND c."resumeUrl" IS NOT NULL
+          AND c."resumeText" IS NOT NULL
         ORDER BY "matchScore" DESC
     `;
 

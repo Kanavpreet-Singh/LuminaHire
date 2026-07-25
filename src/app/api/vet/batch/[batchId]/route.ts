@@ -89,6 +89,11 @@ export async function GET(
                 skippedCount: freshBatch!.skippedCount,
                 errorMessage: freshBatch!.errorMessage,
                 finalizedAt: freshBatch!.finalizedAt,
+                // {sessionId: {name, wins, matches_played, matches}} for the
+                // top-by-absolute-score shortlist that went through the pairwise
+                // tournament (see maybeFinalizeBatch) -- null if the batch predates
+                // this, or had too few COMPLETED members to run one.
+                rankingDetails: freshBatch!.rankingDetails,
             },
             members: memberRollup,
         });

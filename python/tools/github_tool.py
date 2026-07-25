@@ -243,7 +243,20 @@ def get_github_data(username_or_url: str) -> Dict[str, Any]:
     if not username:
         return {"findings": "No valid GitHub username/URL provided.", "urls": []}
     bundle = fetch_github_bundle(username)
-    return {"findings": summarize_github_bundle(bundle), "urls": [{"url": u, "title": ""} for u in github_repo_urls(bundle)]}
+    result: Dict[str, Any] = {
+        "findings": summarize_github_bundle(bundle),
+        "urls": [{"url": u, "title": ""} for u in github_repo_urls(bundle)],
+        # Identity block: lets the researcher cross-check that this profile
+        # actually belongs to the candidate before trusting its data. See
+        # verification.match_names().
+        "identity": {"name": (bundle.get("profile") or {}).get("name"), "handle": username},
+    }
+    # Rate limits and network failures mean "we couldn't look", not "they have
+    # no repos" -- flag it so the caller reports UNREACHABLE rather than
+    # letting the Evaluator read an empty result as a thin GitHub presence.
+    if bundle.get("error"):
+        result["error"] = bundle["error"]
+    return result
 
 
 def get_github_topic_data(username_or_url: str, topic: str) -> Dict[str, Any]:

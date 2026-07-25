@@ -454,6 +454,19 @@ class VetEvaluationApproveAsyncRequest(BaseModel):
     evaluation: dict
 
 
+class RankCandidate(BaseModel):
+    session_id: str
+    name: str
+    evaluation: dict
+    overall_fit_percentage: float | None = None
+
+
+class VetBatchRankRequest(BaseModel):
+    batch_id: str
+    job: JobInput
+    shortlist: list[RankCandidate]
+
+
 class VetQARequest(BaseModel):
     session_id: str
     job: JobInput
@@ -780,6 +793,30 @@ async def evaluation_approve_async(req: VetEvaluationApproveAsyncRequest, backgr
         req.planner_output, req.research_results, req.research_iterations or 0, req.evaluation,
     )
     return {"session_id": req.session_id, "status": "started"}
+
+
+@app.post("/vet/batch/rank")
+@tracing.observe(name="batch_rank")
+async def batch_rank(req: VetBatchRankRequest):
+    """
+    Re-rank a batch's shortlisted (top-by-absolute-score) candidates via a
+    round-robin pairwise tournament (see agents.run_pairwise_tournament) --
+    each pair judged head-to-head instead of trusting each candidate's own
+    independently-produced absolute score. Called once per batch finalization
+    by src/lib/vetting.ts's maybeFinalizeBatch, not per poll.
+    """
+    import agents
+
+    tracing.start_session_trace(req.batch_id, name="batch_rank", metadata={"shortlist_size": len(req.shortlist)})
+    tracing.reset_usage()
+    try:
+        shortlist = [c.model_dump() for c in req.shortlist]
+        result = agents.run_pairwise_tournament(_job_dict(req.job), shortlist)
+        result["usage"] = tracing.get_usage()
+        return result
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Batch ranking failed: {str(e)}")
 
 
 @app.post("/vet/qa")

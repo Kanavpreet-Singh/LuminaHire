@@ -283,18 +283,39 @@ async function refetch<T extends SessionWithApp>(session: T): Promise<T> {
     return (fresh as unknown as T) ?? session;
 }
 
+// Shortlist size for the pairwise re-ranking tournament: the top candidates by
+// absolute score (at least targetHireCount, so every eventual winner is always
+// covered by the tournament, plus a small buffer so borderline candidates get
+// a chance to move up). Round-robin cost is K x (K-1) calls -- independent of
+// total pool size -- so this is a fixed, bounded cost per batch regardless of
+// how many candidates were pooled.
+const TOURNAMENT_SHORTLIST_MIN = 6;
+
 /**
  * Finalize a batch once ALL its member sessions are terminal (COMPLETED/FAILED).
- * Ranks COMPLETED members by their pipeline's own overall_fit_percentage,
- * marks the top-N as winners (batchRank 1..N + Application AI_SHORTLISTED), and
- * flips the batch to COMPLETED. Idempotent: uses the same status-guarded
+ * Each session's overall_fit_percentage comes from a fully independent
+ * Evaluator LLM call (own context, own evidence, own sampling variance), so
+ * absolute scores aren't calibrated against each other and sorting by them
+ * directly bakes in noise. This re-ranks the top-by-absolute-score shortlist
+ * via a pairwise round-robin tournament (python/agents.py's
+ * run_pairwise_tournament, called through /vet/batch/rank) -- every pair
+ * judged head-to-head -- and uses THAT order for the final top-N, falling
+ * back to the plain absolute-score order if the shortlist is too small (<2)
+ * or the ranking call fails (Python down/network error), so a tournament
+ * outage never blocks batch finalization.
+ *
+ * Marks the top-N as winners (batchRank 1..N + Application AI_SHORTLISTED)
+ * and flips the batch to COMPLETED. Idempotent: uses the same status-guarded
  * updateMany lock idiom as syncCompletedResults, so concurrent pollers can't
  * double-finalize -- only the writer that flips DISPATCHING/RUNNING -> COMPLETED
  * proceeds to write ranks. Safe to call unconditionally; a no-op if the batch
  * is already terminal or any member is still running.
  */
 export async function maybeFinalizeBatch(batchId: string): Promise<void> {
-    const members = await prisma.vettingSession.findMany({ where: { batchId } });
+    const members = await prisma.vettingSession.findMany({
+        where: { batchId },
+        include: { application: { include: { candidate: true } } },
+    });
     if (members.length === 0) return;
 
     // Batch members are always AUTONOMOUS: they never pause at AWAITING_*, so
@@ -312,7 +333,54 @@ export async function maybeFinalizeBatch(batchId: string): Promise<void> {
     const ranked = members
         .filter((m) => m.status === "COMPLETED" && fit(m) !== null)
         .sort((a, b) => (fit(b) as number) - (fit(a) as number));
-    const top = ranked.slice(0, batch.targetHireCount);
+
+    const shortlistSize = Math.min(ranked.length, Math.max(batch.targetHireCount, TOURNAMENT_SHORTLIST_MIN));
+    const shortlist = ranked.slice(0, shortlistSize);
+
+    let orderedIds: string[] = shortlist.map((s) => s.id); // absolute-score order, the fallback
+    let rankingDetails: unknown = null;
+
+    if (shortlist.length >= 2) {
+        try {
+            const job = await prisma.jobPosting.findUnique({ where: { id: batch.jobId } });
+            if (job) {
+                const res = await fetch(`${PYTHON_API_URL}/vet/batch/rank`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        batch_id: batchId,
+                        job: {
+                            title: job.title,
+                            description: job.description,
+                            requirements: job.requirements,
+                            recruiter_instructions: batch.recruiterInstructions,
+                        },
+                        shortlist: shortlist.map((s) => ({
+                            session_id: s.id,
+                            name: s.application.candidate.name,
+                            evaluation: s.evaluation || {},
+                            overall_fit_percentage: fit(s),
+                        })),
+                    }),
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (Array.isArray(data.ranking) && data.ranking.length === shortlist.length) {
+                        orderedIds = data.ranking;
+                        rankingDetails = data.details ?? null;
+                    }
+                }
+            }
+        } catch {
+            // Tournament call failed (network/Python down) -- orderedIds is
+            // already the absolute-score fallback order set above.
+        }
+    }
+
+    const top = orderedIds
+        .map((id) => members.find((m) => m.id === id))
+        .filter((m): m is (typeof members)[number] => m != null)
+        .slice(0, batch.targetHireCount);
 
     // Idempotency lock: only the caller that flips the batch terminal proceeds.
     const claim = await prisma.vettingBatch.updateMany({
@@ -321,6 +389,7 @@ export async function maybeFinalizeBatch(batchId: string): Promise<void> {
             status: "COMPLETED",
             finalizedAt: new Date(),
             topSessionIds: top.map((s) => s.id),
+            rankingDetails: rankingDetails as any,
         },
     });
     if (claim.count !== 1) return; // another poller already finalized it

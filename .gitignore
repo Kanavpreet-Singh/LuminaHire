@@ -47,3 +47,8 @@ python/venv/
 python/__pycache__/
 python/test_genai.py
 python/test_api.py
+
+# python
+__pycache__/
+*.py[cod]
+.venv/

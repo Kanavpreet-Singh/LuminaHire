@@ -61,4 +61,12 @@ def get_codeforces_data(handle_or_url: str) -> Dict[str, Any]:
     except (requests.exceptions.RequestException, ValueError):
         pass  # rating history is a bonus, not required for a useful finding
 
-    return {"findings": "\n".join(lines), "urls": [{"url": profile_url, "title": handle}]}
+    if user.get("organization"):
+        lines.append(f"- Organization: {user.get('organization')}")
+
+    real_name = " ".join(filter(None, [user.get("firstName"), user.get("lastName")])).strip()
+    return {
+        "findings": "\n".join(lines),
+        "urls": [{"url": profile_url, "title": handle}],
+        "identity": {"name": real_name or None, "handle": handle},
+    }

@@ -3,25 +3,42 @@ from __future__ import annotations
 """
 LuminaHire — Tool-Calling Research Agent (HITL follow-up)
 ===========================================================
-Handles the human-in-the-loop "ask the researcher to dig deeper" flow: a
-recruiter types free text (e.g. "check if they've written technical articles"
-or "look for a MERN stack repo"), and an LLM genuinely DECIDES which tool(s) to
-call and with what arguments — this is real function-calling, not deterministic
-keyword dispatch.
+Handles the human-in-the-loop "check one more thing" flow: a recruiter types
+free text (e.g. "check if they've written technical articles" or "look for a
+MERN stack repo"), and an LLM genuinely DECIDES which tool(s) to call and with
+what arguments — this is real function-calling, not deterministic keyword
+dispatch.
+
+THE ONE PLACE OPEN-WEB SEARCH IS STILL ALLOWED
+-----------------------------------------------
+The automated pipeline (agents.py) never searches the open web for a
+candidate: a name search cannot distinguish them from anyone else with the
+same name, so folding its results into a score silently misleads the
+recruiter. This path is the deliberate exception, because the two conditions
+that make search dangerous there don't hold here:
+
+  - a human explicitly asked for this specific lookup, and
+  - that human reads the raw result themselves, attributed and cited, rather
+    than having it silently absorbed into a fit percentage.
+
+Results from this path are therefore always labelled as unconfirmed
+attribution (see tools/catalog.py's web-search description), and the
+recruiter decides what they're worth. Everything else still prefers a
+candidate-supplied source whenever one covers the question.
 
 Separation of concerns:
   - tools/catalog.py:  the shared, guardrailed tool roster + dispatch + source
                         inference, used by BOTH this follow-up flow and the
-                        main researcher_node pass in agents.py.
+                        main verification pass in agents.py.
   - research_agent.py: this module just builds the follow-up-specific prompt
-                        (including what's already been researched this
-                        session, so the model doesn't redundantly re-call a
-                        tool already covered) and turns the results into
+                        (including what's already been checked this session,
+                        so the model doesn't redundantly re-call a tool
+                        already covered) and turns the results into
                         research_results[]-shaped findings.
 
 No separate synthesis LLM call is needed: every tool in the catalog already
 returns clean, evaluator-ready findings text (see tools/catalog.py), so this
-mirrors agents.py's main-pass researcher_node -- one LLM call total per
+mirrors agents.py's main verification pass -- one LLM call total per
 follow-up (tool selection), not two.
 """
 
@@ -29,6 +46,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import tools
+import verification
 
 USE_MOCK_AI = os.getenv("MOCK_AI_RESPONSES", "1") != "0"
 
@@ -132,17 +150,23 @@ def _select_and_run_tools(client: Any, instruction: str, candidate: Dict[str, An
 
     context = (
         f"Candidate: {candidate.get('name')}\n\n"
-        f"CANDIDATE PROFILE LINKS (only call a tool for a platform with a real link/username below):\n{available_links}\n\n"
-        f"ALREADY RESEARCHED THIS SESSION: {already_covered}\n"
+        f"CANDIDATE-SUPPLIED PROFILE LINKS (only call a platform tool for one with a real link/username below):\n"
+        f"{available_links}\n\n"
+        f"ALREADY CHECKED THIS SESSION: {already_covered}\n"
         "Do not repeat a tool call for a source already listed above unless the recruiter's instruction "
         "below specifically asks you to re-check or go deeper on that same platform. Focus on what's genuinely new.\n\n"
         f"RECRUITER INSTRUCTION: {instruction}\n\n"
-        "Decide which tool(s) to call to satisfy this instruction, following the rules above. "
-        "You may call more than one tool if needed."
+        "Decide which tool(s) to call to satisfy this instruction. Always prefer a tool that reads a source "
+        "the candidate themselves supplied -- those are identity-verified. web_search_tool is available "
+        "because a human asked for this specific lookup and will read the result, but its hits are NOT "
+        "identity-verified (a name search returns pages about anyone with that name), so use it only when no "
+        "candidate-supplied source can answer the instruction. You may call more than one tool if needed."
     )
 
     try:
-        tool_calls = tools.catalog.select_tools(context, client=client)
+        tool_calls = tools.catalog.select_tools(
+            context, client=client, tool_declarations=tools.catalog.FOLLOWUP_OLLAMA_TOOL_DECLARATIONS
+        )
     except Exception:
         # Degrade gracefully (e.g. Gemini quota exhausted, or Ollama
         # unreachable under LLM_PROVIDER=ollama) -- run_guided_research
@@ -222,15 +246,47 @@ def run_guided_research(job: Dict[str, Any], candidate: Dict[str, Any],
         findings_text = output.get("findings", "") or "No findings."
         source = tools.catalog.infer_source_from_tool(name)
         label = tools.catalog.get_tool_label(name)
+
+        # Same identity cross-check the main pass runs, so a follow-up can't
+        # quietly reintroduce a stranger's profile data that the main pass
+        # would have caught.
+        check = tools.catalog.identity_check(output, candidate, label)
+        if check and check["verdict"] == verification.IDENTITY_MISMATCH:
+            findings_text = f"[IDENTITY MISMATCH -- DO NOT ATTRIBUTE TO THE CANDIDATE] {check['detail']}\n\n{findings_text}"
+
+        # Open-web hits are not identity-verified. Say so on the finding
+        # itself, so the label travels with the evidence into the Evaluator
+        # and the recruiter's view rather than living only in a prompt.
+        if name == "web_search_tool":
+            findings_text = (
+                "[UNCONFIRMED ATTRIBUTION -- open-web result, requested by a recruiter. Web search matches on "
+                "name alone and cannot confirm these pages are about this candidate rather than someone else "
+                "with the same name.]\n\n" + findings_text
+            )
+
+        # Same three-way classification the main pass uses: a failed fetch
+        # must not be reported as a successful check just because the tool
+        # echoed the profile URL back. See agents._finding_status.
+        if output.get("error"):
+            status = "UNREACHABLE"
+            findings_text = (
+                "[SOURCE COULD NOT BE READ THIS RUN -- a fetch failure, not a finding about the candidate.]"
+                f"\n\n{findings_text}"
+            )
+        else:
+            status = "SUCCESS" if urls else "NOT_FOUND"
+
         new_results.append({
             "heading": f"Follow-up: {label}",
             "query": str(record.get("args") or {}),
             "source": source,
             "findings": findings_text,
-            "status": "SUCCESS" if urls else "NOT_FOUND",
+            "status": status,
             "urls": urls,
             "iteration": iteration,
             "triggered_by": "human_followup",
+            "identity_check": check or None,
+            "attribution_confirmed": False if name == "web_search_tool" else None,
         })
 
     return {

@@ -1,12 +1,28 @@
 """
-LuminaHire — Shared Tool Catalog (the ReAct guardrail)
-=========================================================
-The closed, curated set of tools the Researcher (both the main pass in
+LuminaHire — Shared Tool Catalog (the verification guardrail)
+==============================================================
+The closed, curated set of tools the Verifier (both the main pass in
 agents.py's researcher_node, and the HITL follow-up in research_agent.py) is
-allowed to call. This is what "guardrails" the LLM against wandering into
-unnecessary open-web search: every entry here is a specific, purpose-built
-data source, and there is exactly ONE deliberately generic fallback
-(web_search_tool), described as a last resort.
+allowed to call.
+
+THE CENTRAL RULE: every tool here reads a source the CANDIDATE supplied --
+a profile link off their own resume, or a specific artifact (paper title,
+package name) their resume names. No tool discovers sources by searching for
+the candidate's name.
+
+That rule is the product's whole integrity story. Name-based discovery
+cannot distinguish the candidate from anyone else with the same name, and a
+recruiter shown a stranger's GitHub or publication record has been actively
+misled -- worse than being shown nothing. Anything that can't be reached
+from a candidate-supplied source is reported as UNVERIFIABLE and handed to
+the recruiter as an interview question instead (see verification.py).
+
+The generic open-web `web_search_tool` was REMOVED from this roster for that
+reason. It remains in tools/web_search.py, still used by the HITL follow-up
+path where a human has explicitly typed what to look for and can judge the
+results themselves -- a human-directed search with a human reading the
+output is a different risk profile from an agent silently folding search
+results into a score.
 
 TOOL_DECLARATIONS: the Gemini FunctionDeclaration list for the tool-calling
                     turn.
@@ -30,6 +46,7 @@ from google.genai import types
 
 import llm_client
 import tracing
+import verification
 from . import (
     github_tool, linkedin_tool, leetcode_tool, gfg_tool, codeforces_tool,
     hackerrank_tool, codechef_tool, medium_tool, devto_tool, stackoverflow_tool,
@@ -56,10 +73,12 @@ _URL_TOOLS = [
     ("get_portfolio_website_data", "portfolio_url", "personal portfolio site", "PORTFOLIO"),
 ]
 
-# Tools that operate on the whole candidate (name-matched search), not a
-# single known URL -- still guardrailed (only called when relevant), but
-# their FunctionDeclaration takes no required args since dispatch() already
-# has the candidate dict.
+# Artifact-verification tools: these confirm a SPECIFIC thing the resume
+# names (a paper title, a publication) rather than discovering work by
+# searching the candidate's name. Each takes an optional `title` -- supplied,
+# it verifies that exact artifact and checks the candidate is really among
+# its authors; omitted, the underlying tool degrades to a name lookup it
+# explicitly labels UNCONFIRMED (see scholar_tool/arxiv_tool).
 _CANDIDATE_TOOLS = [
     ("get_medium_articles", "medium_url", "Medium", "MEDIUM"),
     ("get_scholar_papers", "scholar_url", "Google Scholar / academic papers", "SCHOLAR"),
@@ -67,7 +86,7 @@ _CANDIDATE_TOOLS = [
 ]
 
 _GITHUB_TOPIC_TOOL = "get_github_topic_data"
-_WEB_SEARCH_TOOL = "web_search_tool"
+_WEB_SEARCH_TOOL = "web_search_tool"  # deliberately NOT in _TOOL_SPECS; HITL-follow-up only, see module docstring
 
 
 def _url_spec(name: str, label: str) -> Dict[str, Any]:
@@ -82,11 +101,26 @@ def _url_spec(name: str, label: str) -> Dict[str, Any]:
     }
 
 
-def _no_arg_spec(name: str, label: str) -> Dict[str, Any]:
+def _artifact_spec(name: str, label: str) -> Dict[str, Any]:
     return {
         "name": name,
-        "description": f"Search for the candidate's {label}, matched by name. Call only when relevant to the research goals.",
-        "parameters": {"type": "object", "properties": {}},
+        "description": (
+            f"Verify a specific {label} item the candidate's resume names. STRONGLY prefer passing `title` "
+            "with the exact publication/article title claimed on the resume -- that verifies the specific "
+            "artifact and confirms the candidate is genuinely among its authors. Calling this without a "
+            "title falls back to a name-only lookup, which cannot distinguish this candidate from anyone "
+            "else with the same name and is reported as UNCONFIRMED. Only call at all when the resume "
+            "actually claims a publication."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "The exact title of the publication/article claimed on the resume.",
+                },
+            },
+        },
     }
 
 
@@ -97,7 +131,12 @@ _TOOL_SPECS: List[Dict[str, Any]] = [
     *[_url_spec(name, label) for name, _key, label, _source in _URL_TOOLS],
     {
         "name": _GITHUB_TOPIC_TOOL,
-        "description": "Search the candidate's GitHub repositories for a specific topic or technology (e.g. 'MERN stack', 'machine learning'). Only call if a GitHub URL is known.",
+        "description": (
+            "Check whether the candidate's OWN GitHub repositories actually contain a specific technology "
+            "or project type they claim on their resume (e.g. 'MERN stack', 'machine learning', 'Kubernetes'). "
+            "This is the highest-value verification tool available: it tests a resume claim directly against "
+            "the candidate's own code. Only call if a GitHub URL is known."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -107,59 +146,66 @@ _TOOL_SPECS: List[Dict[str, Any]] = [
             "required": ["url", "topic"],
         },
     },
-    *[_no_arg_spec(name, label) for name, _key, label, _source in _CANDIDATE_TOOLS],
-    {
-        "name": _WEB_SEARCH_TOOL,
-        "description": (
-            "Search the general public web. Use ONLY for claims no other tool covers, and prefer a specific "
-            "tool whenever the candidate has a matching profile link. Most candidates are NOT public figures: "
-            "a generic search cannot answer narrative questions like 'what was their specific role' or 'what "
-            "technologies did they use at company X' -- companies don't publish per-employee details. Do not "
-            "ask multiple narrative sub-questions about the same company; use at most ONE combined query per "
-            "company/claim (e.g. 'candidate name' + company), and treat NOT_FOUND as the normal, expected "
-            "outcome for most people, not a reason to retry with different phrasing. At most 2 calls per pass."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {"query": {"type": "string", "description": "The search query"}},
-            "required": ["query"],
-        },
+    *[_artifact_spec(name, label) for name, _key, label, _source in _CANDIDATE_TOOLS],
+]
+
+# The open-web search spec. Kept OUT of the verification roster above (see
+# module docstring) and offered only on the HITL follow-up path, where a
+# recruiter has typed a specific instruction and reads the result themselves.
+_WEB_SEARCH_SPEC: Dict[str, Any] = {
+    "name": _WEB_SEARCH_TOOL,
+    "description": (
+        "Search the general public web. AVAILABLE ONLY because a human recruiter explicitly asked for this "
+        "specific lookup and will read the result themselves. Results are NOT identity-verified: a search for "
+        "a person's name returns pages about anyone with that name, so never present a hit as confirmed fact "
+        "about this candidate -- report what was found and that attribution is unconfirmed. Prefer any "
+        "candidate-supplied profile tool over this whenever one covers the question."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {"query": {"type": "string", "description": "The search query"}},
+        "required": ["query"],
     },
-]
+}
 
-TOOL_DECLARATIONS = types.Tool(function_declarations=[
-    types.FunctionDeclaration(name=spec["name"], description=spec["description"], parameters_json_schema=spec["parameters"])
-    for spec in _TOOL_SPECS
-])
+_FOLLOWUP_TOOL_SPECS: List[Dict[str, Any]] = [*_TOOL_SPECS, _WEB_SEARCH_SPEC]
 
-# Ollama's /api/chat `tools` param (and OpenAI-compatible APIs generally)
-# expect this envelope shape rather than Gemini's FunctionDeclaration objects.
-OLLAMA_TOOL_DECLARATIONS = [
-    {"type": "function", "function": {"name": spec["name"], "description": spec["description"], "parameters": spec["parameters"]}}
-    for spec in _TOOL_SPECS
-]
+
+def _gemini_tool(specs: List[Dict[str, Any]]) -> types.Tool:
+    return types.Tool(function_declarations=[
+        types.FunctionDeclaration(name=s["name"], description=s["description"], parameters_json_schema=s["parameters"])
+        for s in specs
+    ])
+
+
+def _openai_tools(specs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Ollama's /api/chat `tools` param (and OpenAI-compatible APIs generally) expect this envelope shape."""
+    return [
+        {"type": "function", "function": {"name": s["name"], "description": s["description"], "parameters": s["parameters"]}}
+        for s in specs
+    ]
+
+
+TOOL_DECLARATIONS = _gemini_tool(_TOOL_SPECS)
+OLLAMA_TOOL_DECLARATIONS = _openai_tools(_TOOL_SPECS)
+
+# HITL follow-up roster = the verification roster plus open-web search.
+FOLLOWUP_TOOL_DECLARATIONS = _gemini_tool(_FOLLOWUP_TOOL_SPECS)
+FOLLOWUP_OLLAMA_TOOL_DECLARATIONS = _openai_tools(_FOLLOWUP_TOOL_SPECS)
 
 # Restricted roster covering only the tool calls that genuinely need LLM
-# judgment: the name-searched CANDIDATE_TOOLS (is checking Medium/Scholar/
-# arXiv worth it?), GitHub topic search (what topic matters?), and
-# web_search_tool (what's worth verifying?). Every _URL_TOOLS platform is
-# deliberately excluded -- whether the candidate has a real GitHub/LeetCode/
-# etc. URL is unambiguous ground truth, not a judgment call, so the main
-# researcher pass calls those deterministically (see agents.py) instead of
-# leaving it up to the model. Smaller/cheaper tool-selection models otherwise
-# tend to reach for the generic web_search_tool instead of a specific
-# platform tool even when a real link is available and explicitly listed.
-_AMBIGUOUS_TOOL_NAMES = {name for name, _key, _label, _source in _CANDIDATE_TOOLS} | {_GITHUB_TOPIC_TOOL, _WEB_SEARCH_TOOL}
+# judgment: the artifact-verification CANDIDATE_TOOLS (does the resume claim
+# a publication, and what's its title?) and GitHub topic search (which
+# claimed technology is worth testing against their repos?). Every _URL_TOOLS
+# platform is deliberately excluded -- whether the candidate has a real
+# GitHub/LeetCode/etc. URL is unambiguous ground truth, not a judgment call,
+# so the main verification pass calls those deterministically (see agents.py)
+# instead of leaving it up to the model.
+_AMBIGUOUS_TOOL_NAMES = {name for name, _key, _label, _source in _CANDIDATE_TOOLS} | {_GITHUB_TOPIC_TOOL}
 _AMBIGUOUS_TOOL_SPECS = [spec for spec in _TOOL_SPECS if spec["name"] in _AMBIGUOUS_TOOL_NAMES]
 
-AMBIGUOUS_TOOL_DECLARATIONS = types.Tool(function_declarations=[
-    types.FunctionDeclaration(name=spec["name"], description=spec["description"], parameters_json_schema=spec["parameters"])
-    for spec in _AMBIGUOUS_TOOL_SPECS
-])
-AMBIGUOUS_OLLAMA_TOOL_DECLARATIONS = [
-    {"type": "function", "function": {"name": spec["name"], "description": spec["description"], "parameters": spec["parameters"]}}
-    for spec in _AMBIGUOUS_TOOL_SPECS
-]
+AMBIGUOUS_TOOL_DECLARATIONS = _gemini_tool(_AMBIGUOUS_TOOL_SPECS)
+AMBIGUOUS_OLLAMA_TOOL_DECLARATIONS = _openai_tools(_AMBIGUOUS_TOOL_SPECS)
 
 
 _SOURCE_BY_TOOL = {name: source for name, _key, _label, source in _URL_TOOLS}
@@ -238,10 +284,13 @@ def dispatch(name: str, args: Dict[str, Any], candidate: Dict[str, Any], client:
             return github_tool.get_github_topic_data(known_url, args.get("topic", ""))
         if name == "get_medium_articles":
             return medium_tool.get_medium_articles(candidate, client=client)
+        # `title` verifies the specific artifact the resume names and confirms
+        # the candidate is actually among its authors; without it these fall
+        # back to a name lookup they label UNCONFIRMED themselves.
         if name == "get_scholar_papers":
-            return scholar_tool.get_scholar_papers(candidate)
+            return scholar_tool.get_scholar_papers(candidate, title=args.get("title"))
         if name == "get_arxiv_papers":
-            return arxiv_tool.get_arxiv_papers(candidate)
+            return arxiv_tool.get_arxiv_papers(candidate, title=args.get("title"))
         if name == _WEB_SEARCH_TOOL:
             return web_search.web_search_tool(client, args.get("query", ""), candidate_name=candidate.get("name"))
         return {"findings": f"Unknown tool requested: {name}", "urls": []}
@@ -347,11 +396,13 @@ def select_tools(prompt: str, client: Any = None, tool_declarations: List[Dict[s
 
     tool_declarations: pass AMBIGUOUS_OLLAMA_TOOL_DECLARATIONS to restrict the
     model's choices to only the genuinely judgment-based tools (used by the
-    main researcher pass, which calls every known-URL platform deterministically
-    and only delegates the ambiguous decisions to the LLM). Defaults to the
-    full roster (used by the HITL follow-up, where a human's free-text
-    instruction may legitimately name any platform, including ones already
-    covered).
+    main verification pass, which calls every known-URL platform
+    deterministically and only delegates the ambiguous decisions to the LLM),
+    or FOLLOWUP_OLLAMA_TOOL_DECLARATIONS for the HITL follow-up, where a
+    human's free-text instruction may legitimately name any platform
+    (including ones already covered) and where open-web search is permitted
+    because a person asked for it and will read the result. Defaults to the
+    verification roster, which excludes open-web search entirely.
     """
     return _select_tools_openai(prompt, tool_declarations=tool_declarations)
 
@@ -376,9 +427,32 @@ def build_available_links_context(candidate: Dict[str, Any]) -> str:
         value = candidate.get(key)
         lines.append(f"- {label}: {value if value else 'not available'}")
     for _name, key, label, _source in _CANDIDATE_TOOLS:
-        if key:
-            value = candidate.get(key)
-            lines.append(f"- {label}: {value if value else 'not directly linked, but may still be searchable by name'}")
-        else:
-            lines.append(f"- {label}: searchable by name")
+        value = candidate.get(key) if key else None
+        lines.append(
+            f"- {label}: {value}" if value
+            else f"- {label}: no link provided -- only checkable if the resume names a specific title to verify"
+        )
     return "\n".join(lines)
+
+
+def identity_check(output: Dict[str, Any], candidate: Dict[str, Any], platform: str) -> Dict[str, Any]:
+    """
+    Cross-check the real name a platform tool read off a profile against the
+    candidate's name, so a mistyped or borrowed profile link can't silently
+    contribute a stranger's stats to this candidate's evaluation. Returns a
+    record for research_results[].identity_check, or {} when the tool exposed
+    no name to compare (most platforms don't publish one).
+    """
+    identity = output.get("identity") or {}
+    profile_name = identity.get("name")
+    if not profile_name:
+        return {}
+    result = verification.match_names(candidate.get("name"), profile_name)
+    return {
+        "platform": platform,
+        "profile_name": profile_name,
+        "handle": identity.get("handle"),
+        "verdict": result["verdict"],
+        "confidence": result["confidence"],
+        "detail": result["detail"],
+    }

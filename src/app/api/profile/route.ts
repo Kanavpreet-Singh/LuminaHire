@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import prisma from "@/lib/prisma";
 import { deleteUploadThingFileByUrl } from "@/lib/uploadthing";
+import { canSaveProfile } from "@/lib/resume-required";
 
 const PYTHON_API_URL = process.env.PYTHON_API_URL || "http://localhost:8000";
 const TARGET_EMBEDDING_DIMENSIONS = Number(process.env.EMBEDDING_DIMENSIONS || "1536");
@@ -128,6 +129,15 @@ export async function POST(req: Request) {
         }
     }
 
+    // A resume is mandatory: the whole pipeline reads the resume to find the
+    // claims to check and the links to check them against, so a profile
+    // without one cannot be vetted. Enforced here as well as in the UI, so
+    // the rule holds for any client that posts directly. See lib/resume-required.ts.
+    const resumeCheck = canSaveProfile(user.candidate, resumeUrl);
+    if (!resumeCheck.ok) {
+        return new NextResponse(resumeCheck.reason, { status: 400 });
+    }
+
     // 1. Save or Update the standard fields
     const updatedCandidate = await prisma.candidate.upsert({
         where: { userId: user.id },
@@ -217,23 +227,11 @@ export async function POST(req: Request) {
                     console.error("⚠️ Failed to delete old UploadThing resume:", cleanupError);
                 });
             }
-        } else if (resumeUrl === null) {
-            // User deleted their resume, clear the vector and text
-            console.log("🗑️ Clearing vector and resume text...");
-            await prisma.$executeRaw`
-                UPDATE candidates 
-                SET "embedding" = NULL, "resumeText" = NULL 
-                WHERE "userId" = ${user.id}
-            `;
-
-            if (existingResumeUrl) {
-                void deleteUploadThingFileByUrl(existingResumeUrl).catch((cleanupError) => {
-                    console.error("⚠️ Failed to delete removed UploadThing resume:", cleanupError);
-                });
-            }
-
-            embeddingStatus = "success";
         }
+        // There is deliberately no resume-removal branch here: canSaveProfile()
+        // above rejects resumeUrl === null, because a candidate with no resume
+        // cannot be vetted. Replacing a resume is handled by the block above,
+        // which deletes the superseded upload once the new one is processed.
     }
 
     return NextResponse.json({
