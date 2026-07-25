@@ -147,6 +147,89 @@ interface VettingSessionData {
 }
 
 /**
+ * Renders a tool's findings text as structured content.
+ *
+ * The tools emit a deliberately simple line format — a header line, "- " facts,
+ * "  * " sub-items, inline "[https://…]" citations, and "[ALL-CAPS …]" alert
+ * banners for identity mismatches and unreadable sources. Dumping that into one
+ * `whitespace-pre-wrap` paragraph made the alerts disappear into the body text
+ * and let long repo URLs push the card into horizontal overflow.
+ */
+function FindingsText({ text }: { text: string }) {
+    if (!text?.trim()) return null;
+
+    // Leading "[SOMETHING IN CAPS ...]" blocks are alerts the Verifier prepends
+    // (identity mismatch, unreadable source). They must not read as body copy.
+    // The marker's explanatory sentence follows it on the same line, so the
+    // match runs to end-of-line — capturing only the bracket would orphan that
+    // sentence into the body. Looping (rather than a /g/ replace) also picks up
+    // a second alert, which an unanchored global replace cannot reach.
+    const alerts: string[] = [];
+    let body = text.replace(/\r/g, "");
+    for (;;) {
+        const match = body.match(/^\s*\[([A-Z][A-Z\s\-]{6,}[^\]]*)\]([^\n]*)\n*/);
+        if (!match) break;
+        alerts.push(`${match[1]}${match[2]}`.trim());
+        body = body.slice(match[0].length);
+    }
+    body = body.trim();
+
+    const lines = body.split("\n").filter((l) => l.trim());
+
+    return (
+        <div className="space-y-2 min-w-0">
+            {alerts.map((alert, idx) => (
+                <div
+                    key={idx}
+                    className="text-xs leading-relaxed rounded-lg border border-amber-400/40 bg-amber-500/10 text-amber-800 dark:text-amber-200 px-3 py-2 break-words"
+                >
+                    {alert}
+                </div>
+            ))}
+            {lines.map((line, idx) => {
+                const sub = /^\s{2,}[*•]\s?/.test(line);
+                const bullet = /^\s*-\s/.test(line);
+                const content = line.replace(/^\s*[-*•]\s?/, "").trim();
+
+                // Pull the trailing "[url]" citation out so it can wrap and be
+                // clickable instead of running off the edge as raw text.
+                const urlMatch = content.match(/\[(https?:\/\/[^\]]+)\]\s*$/);
+                const href = urlMatch?.[1];
+                const label = href ? content.slice(0, urlMatch!.index).trim() : content;
+
+                if (!bullet && !sub) {
+                    return (
+                        <p key={idx} className="text-sm font-semibold text-content-primary break-words">
+                            {label}
+                            {href && <> <a href={href} target="_blank" rel="noreferrer" className="font-normal text-brand-500 hover:underline break-all">{href.replace(/^https?:\/\//, "")}</a></>}
+                        </p>
+                    );
+                }
+                return (
+                    <div
+                        key={idx}
+                        className={`flex items-start gap-2 text-sm text-content-secondary leading-relaxed break-words ${sub ? "pl-5" : ""}`}
+                    >
+                        <span className={`shrink-0 mt-1.5 rounded-full ${sub ? "w-1 h-1 bg-content-tertiary" : "w-1.5 h-1.5 bg-brand-500/60"}`} />
+                        <span className="min-w-0 break-words">
+                            {label}
+                            {href && (
+                                <>
+                                    {" "}
+                                    <a href={href} target="_blank" rel="noreferrer" className="text-brand-500 hover:underline break-all">
+                                        {href.replace(/^https?:\/\//, "")}
+                                    </a>
+                                </>
+                            )}
+                        </span>
+                    </div>
+                );
+            })}
+        </div>
+    );
+}
+
+/**
  * Presentation rules for each claim status. The wording matters as much as the
  * colour here: UNVERIFIABLE is deliberately styled as neutral (slate, not
  * amber/red) and labelled "Not publicly checkable", because most engineering
@@ -1162,9 +1245,9 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                             ) : (
                                 <div className="space-y-3">
                                     {(sessionData.researchResults as ResearchFinding[]).map((r, idx) => (
-                                        <div key={idx} className="p-4 bg-surface-primary border border-border-default rounded-xl space-y-2">
+                                        <div key={idx} className="p-4 bg-surface-primary border border-border-default rounded-xl space-y-2 min-w-0 overflow-hidden">
                                             <div className="flex items-start justify-between gap-3 flex-wrap">
-                                                <h4 className="font-bold text-sm text-content-primary">{r.heading}</h4>
+                                                <h4 className="font-bold text-sm text-content-primary break-words min-w-0">{r.heading}</h4>
                                                 <div className="flex items-center gap-2 shrink-0">
                                                     {r.triggered_by === "human_followup" && (
                                                         <span className="px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-brand-500/10 text-brand-500 border border-brand-500/20">
@@ -1183,7 +1266,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                                     </span>
                                                 </div>
                                             </div>
-                                            <p className="text-sm text-content-secondary leading-relaxed whitespace-pre-wrap">{r.findings}</p>
+                                            <FindingsText text={r.findings} />
                                             {Array.isArray(r.urls) && r.urls.length > 0 && (
                                                 <div className="flex flex-wrap gap-2 pt-1">
                                                     {r.urls.map((u, uidx) => {
@@ -1538,9 +1621,9 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                     </div>
                                 ) : (
                                     (sessionData.researchResults as ResearchFinding[]).map((finding, idx) => (
-                                        <div key={idx} className="bg-surface-card border border-border-default rounded-2xl p-5 sm:p-6 space-y-2.5 shadow-md">
-                                            <div className="flex items-start justify-between gap-3">
-                                                <h4 className="text-sm font-bold text-content-primary">{finding.heading}</h4>
+                                        <div key={idx} className="bg-surface-card border border-border-default rounded-2xl p-5 sm:p-6 space-y-2.5 shadow-md min-w-0 overflow-hidden">
+                                            <div className="flex items-start justify-between gap-3 flex-wrap">
+                                                <h4 className="text-sm font-bold text-content-primary break-words min-w-0">{finding.heading}</h4>
                                                 <div className="flex items-center gap-2 shrink-0">
                                                     {finding.triggered_by === "human_followup" && (
                                                         <span className="px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-brand-500/10 text-brand-500 border border-brand-500/20">FOLLOW-UP</span>
@@ -1553,7 +1636,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                                     }`}>{finding.status}</span>
                                                 </div>
                                             </div>
-                                            <p className="text-sm text-content-secondary leading-relaxed whitespace-pre-wrap">{finding.findings}</p>
+                                            <FindingsText text={finding.findings} />
                                             {(finding.urls || []).length > 0 && (
                                                 <div className="flex flex-wrap gap-x-4 gap-y-1.5 pt-1">
                                                     {(finding.urls || []).map((u, uidx) => {
