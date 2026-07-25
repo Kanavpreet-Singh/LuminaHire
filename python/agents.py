@@ -804,15 +804,6 @@ def researcher_node(state: AgentState) -> Dict[str, Any]:
             else:
                 _emit_step(state, f"🪪 {label}: identity confirmed ({check['profile_name']}).")
 
-        # A blocked scraper is materially different from "this profile has
-        # nothing on it" -- the recruiter should be told to click the link
-        # themselves rather than shown a silent gap. See verification.UNCHECKED.
-        if output.get("scrape_blocked"):
-            findings_text += (
-                "\n\n[PARTIAL READ] This site blocked automated reading of the profile page this run, so some "
-                "details could not be confirmed. The link above is valid — open it to check manually."
-            )
-
         results.append({
             "heading": label, "query": url, "source": source,
             "findings": findings_text, "status": status, "urls": urls, "iteration": iteration,
@@ -1151,10 +1142,10 @@ HOW TO RULE EACH CLAIM (claim_verdicts — one entry per claim, none omitted):
   do their best work inside private company repos. A claim being UNVERIFIABLE tells you about the
   public visibility of the work, NOT about the candidate's honesty or ability.
 - UNCHECKED: a relevant source existed but couldn't be read this run. Any finding whose status is
-  UNREACHABLE, or whose text is marked [SOURCE COULD NOT BE READ THIS RUN] or [PARTIAL READ], is a
-  FETCH FAILURE, not a finding about the candidate. Never cite it as evidence for or against a
-  claim, and never let it lower a score — rule the affected claims UNCHECKED and note that the
-  recruiter should open the link themselves.
+  UNREACHABLE, or whose text is marked [SOURCE COULD NOT BE READ THIS RUN], is a FETCH FAILURE, not
+  a finding about the candidate. Never cite it as evidence for or against a claim, and never let it
+  lower a score — rule the affected claims UNCHECKED and note that the recruiter should open the
+  link themselves.
 
 SCORING RULES (these are hard rules):
 - NEVER lower any dimension score, and never add a gap or concern, because a claim is UNVERIFIABLE

@@ -445,7 +445,15 @@ def identity_check(output: Dict[str, Any], candidate: Dict[str, Any], platform: 
     """
     identity = output.get("identity") or {}
     profile_name = identity.get("name")
+    handle = identity.get("handle")
     if not profile_name:
+        return {}
+    # Several platforms return the handle itself as the display name when the
+    # user never set a real one (LeetCode's API does this: name == "Kanav_05").
+    # That is a placeholder, not an identity claim -- comparing it to the
+    # resume name would manufacture a MISMATCH on a perfectly valid profile,
+    # which is the exact false accusation this check exists to prevent.
+    if handle and profile_name.strip().lower() == str(handle).strip().lower():
         return {}
     result = verification.match_names(candidate.get("name"), profile_name)
     return {
