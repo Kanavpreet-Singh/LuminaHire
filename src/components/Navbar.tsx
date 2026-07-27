@@ -52,11 +52,13 @@ export default function Navbar() {
                         (session.user as any).role === "RECRUITER" ? (
                             <>
                                 <Link href="/dashboard" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Dashboard</Link>
+                                <Link href="/dashboard/practice-sets" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Practice Questions</Link>
                                 <Link href="/profile" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">My Profile</Link>
                             </>
                         ) : (
                             <>
                                 <Link href="/jobs" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Explore Jobs</Link>
+                                <Link href="/practice" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">Practice</Link>
                                 <Link href="/profile" className="nav-link-underline relative no-underline text-content-secondary text-[0.9rem] font-medium transition-colors duration-200 hover:text-content-primary">My Profile</Link>
                             </>
                         )
@@ -143,11 +145,13 @@ export default function Navbar() {
                         (session.user as any).role === "RECRUITER" ? (
                             <>
                                 <Link href="/dashboard" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Dashboard</Link>
+                                <Link href="/dashboard/practice-sets" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Practice Questions</Link>
                                 <Link href="/profile" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>My Profile</Link>
                             </>
                         ) : (
                             <>
                                 <Link href="/jobs" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Explore Jobs</Link>
+                                <Link href="/practice" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>Practice</Link>
                                 <Link href="/profile" className="no-underline text-content-secondary py-3 text-[0.95rem] font-medium transition-colors duration-200 hover:text-content-primary" onClick={() => setMobileMenuOpen(false)}>My Profile</Link>
                             </>
                         )

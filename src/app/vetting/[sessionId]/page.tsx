@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import InterviewKit from "@/components/InterviewKit";
+import { verdict } from "@/lib/verdict";
 
 interface SearchQuery {
     heading: string;
@@ -230,44 +232,31 @@ function FindingsText({ text }: { text: string }) {
 }
 
 /**
- * Presentation rules for each claim status. The wording matters as much as the
- * colour here: UNVERIFIABLE is deliberately styled as neutral (slate, not
- * amber/red) and labelled "Not publicly checkable", because most engineering
+ * Claim-status presentation now lives in one place: src/lib/verdict.ts.
+ *
+ * It used to be defined here AND re-invented on every other surface, so the
+ * same ruling looked different depending on where you met it — which turns a
+ * four-word vocabulary into something you re-learn per screen. The reasoning
+ * that was here is preserved there: UNVERIFIABLE is styled NEUTRAL (slate, not
+ * amber or red) and labelled "Not publicly checkable", because most engineering
  * work happens in private repos and showing it as a warning would read as an
  * accusation against candidates who have simply had normal jobs.
+ *
+ * `badge`/`dot` are kept as local names so the JSX below is untouched.
  */
-const CLAIM_STATUS_STYLES: Record<string, { label: string; badge: string; dot: string; blurb: string }> = {
-    VERIFIED: {
-        label: "Verified",
-        badge: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-400/30",
-        dot: "bg-emerald-500",
-        blurb: "Confirmed against a profile the candidate linked.",
-    },
-    CONTRADICTED: {
-        label: "Contradicted",
-        badge: "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-400/30",
-        dot: "bg-rose-500",
-        blurb: "The candidate's own linked profile conflicts with this claim.",
-    },
-    UNVERIFIABLE: {
-        label: "Not publicly checkable",
-        badge: "bg-slate-500/10 text-slate-700 dark:text-slate-300 border-slate-400/30",
-        dot: "bg-slate-400",
-        blurb: "Normal for private/internal work — ask about it in the interview.",
-    },
-    UNCHECKED: {
-        label: "Could not read source",
-        badge: "bg-amber-500/10 text-amber-700 dark:text-amber-300 border-amber-400/30",
-        dot: "bg-amber-500",
-        blurb: "A relevant link exists but couldn't be read automatically — open it manually.",
-    },
-};
-
-const CLAIM_STATUS_ORDER = ["CONTRADICTED", "VERIFIED", "UNCHECKED", "UNVERIFIABLE"] as const;
-
 function claimStyle(status: string) {
-    return CLAIM_STATUS_STYLES[(status || "").toUpperCase()] ?? CLAIM_STATUS_STYLES.UNVERIFIABLE;
+    const v = verdict(status);
+    return { label: v.label, badge: v.pill, dot: v.solid, blurb: v.blurb };
 }
+
+/**
+ * Display order for the tally on this page, which deliberately differs from
+ * lib/verdict's VERDICT_ORDER. That one ranks by "what needs acting on", for
+ * lists a recruiter works down. This is a summary count of everything found, so
+ * the two findings that carry actual evidence — contradicted and verified — sit
+ * together at the front, and the two flavours of "nothing to report" follow.
+ */
+const CLAIM_STATUS_ORDER = ["CONTRADICTED", "VERIFIED", "UNCHECKED", "UNVERIFIABLE"] as const;
 
 /**
  * The résumé verification matrix: every claim the candidate makes, and whether
@@ -413,7 +402,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
     // shown. Every stage's data is persisted on the session (researchPlan,
     // researchResults, evaluation, finalReport), so a completed session can be
     // reviewed stage by stage at any time.
-    const [completedTab, setCompletedTab] = useState<"plan" | "research" | "evaluation" | "report">("report");
+    const [completedTab, setCompletedTab] = useState<"plan" | "research" | "evaluation" | "report" | "kit">("report");
 
     useEffect(() => {
         fetchSession();
@@ -764,7 +753,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
     if (error && !sessionData) {
         return (
             <div className="flex-1 bg-surface-primary flex flex-col justify-center items-center p-8 space-y-4">
-                <div className="p-6 bg-rose-500/10 border border-rose-500/20 text-rose-600 rounded-2xl text-center max-w-md">
+                <div className="p-6 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-2xl text-center max-w-md">
                     <h2 className="text-xl font-bold mb-2">Error Loading Session</h2>
                     <p className="text-sm">{error}</p>
                 </div>
@@ -780,7 +769,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
     if (!sessionData.application) {
         return (
             <div className="flex-1 bg-surface-primary flex flex-col justify-center items-center p-8 space-y-4">
-                <div className="p-6 bg-amber-500/10 border border-amber-500/20 text-amber-700 rounded-2xl text-center max-w-md">
+                <div className="p-6 bg-amber-500/10 border border-amber-500/20 text-amber-300 rounded-2xl text-center max-w-md">
                     <h2 className="text-xl font-bold mb-2">Session Data Incomplete</h2>
                     <p className="text-sm">The session is still loading related candidate and job details. Try refreshing in a moment.</p>
                 </div>
@@ -1112,7 +1101,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                                             <label className="text-xs font-bold text-content-secondary">Heading / Title</label>
                                                             <button 
                                                                 onClick={(e) => { e.stopPropagation(); handleDeleteQuery(idx); }}
-                                                                className="text-xs font-bold text-rose-500 hover:text-rose-600 transition-colors"
+                                                                className="text-xs font-bold text-rose-500 hover:text-rose-400 transition-colors"
                                                             >
                                                                 Delete Item
                                                             </button>
@@ -1258,9 +1247,9 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                                         {r.source}
                                                     </span>
                                                     <span className={`px-2 py-0.5 rounded-md text-[0.65rem] font-bold uppercase border ${
-                                                        r.status === "SUCCESS" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" :
-                                                        r.status === "ERROR" ? "bg-rose-500/10 text-rose-600 border-rose-500/20" :
-                                                        "bg-amber-500/10 text-amber-700 border-amber-500/20"
+                                                        r.status === "SUCCESS" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" :
+                                                        r.status === "ERROR" ? "bg-rose-500/10 text-rose-400 border-rose-500/20" :
+                                                        "bg-amber-500/10 text-amber-300 border-amber-500/20"
                                                     }`}>
                                                         {r.status}
                                                     </span>
@@ -1355,8 +1344,8 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                 </div>
                                 <span className={`px-4 py-1.5 rounded-full text-xs font-bold border uppercase tracking-wider ${
                                     sessionData.evaluation.evidence_sufficient === false
-                                        ? "text-amber-700 bg-amber-500/10 border-amber-500/20"
-                                        : "text-emerald-600 bg-emerald-500/10 border-emerald-500/20"
+                                        ? "text-amber-300 bg-amber-500/10 border-amber-500/20"
+                                        : "text-emerald-400 bg-emerald-500/10 border-emerald-500/20"
                                 }`}>
                                     {sessionData.evaluation.evidence_sufficient === false ? "Evidence Thin" : "Evidence Sufficient"}
                                 </span>
@@ -1478,6 +1467,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                 ["research", "2 · Research"],
                                 ["evaluation", "3 · Evaluation"],
                                 ["report", "4 · Final Report"],
+                                ["kit", "Interview Kit"],
                             ] as const).map(([key, label]) => (
                                 <button
                                     key={key}
@@ -1492,6 +1482,11 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                 </button>
                             ))}
                         </div>
+
+                        {/* Interview Kit: the runnable interview built from this
+                            session's claim verdicts. A derived artifact, generated on
+                            demand rather than as a pipeline stage. */}
+                        {completedTab === "kit" && <InterviewKit sessionId={sessionId} />}
 
                         {/* Stage 1: Planner output (read-only) */}
                         {completedTab === "plan" && (
@@ -1631,8 +1626,8 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                                     <span className="px-2 py-0.5 rounded-md text-[0.65rem] font-bold bg-surface-secondary text-content-tertiary border border-border-default uppercase">{finding.source}</span>
                                                     <span className={`px-2 py-0.5 rounded-md text-[0.65rem] font-bold border uppercase ${
                                                         finding.status === "SUCCESS"
-                                                            ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20"
-                                                            : "bg-amber-500/10 text-amber-600 border-amber-500/20"
+                                                            ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20"
+                                                            : "bg-amber-500/10 text-amber-400 border-amber-500/20"
                                                     }`}>{finding.status}</span>
                                                 </div>
                                             </div>
@@ -1672,7 +1667,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                                 <div className="flex items-center justify-between gap-3">
                                                     <h3 className="text-lg font-bold text-content-primary">Dimension Scores</h3>
                                                     {typeof sessionData.evaluation.overall_fit_percentage === "number" && (
-                                                        <span className="px-3 py-1.5 rounded-full text-xs font-black bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
+                                                        <span className="px-3 py-1.5 rounded-full text-xs font-black bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                                                             {sessionData.evaluation.overall_fit_percentage}% fit
                                                         </span>
                                                     )}
@@ -1786,13 +1781,13 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                     <span className="absolute text-3xl font-black text-content-primary">{sessionData.finalReport.overall_fit_percentage}%</span>
                                 </div>
                                 <span className={`px-4 py-1.5 rounded-full text-xs font-bold border uppercase tracking-wider ${
-                                    sessionData.finalReport.verdict === "STRONG_MATCH" ? "text-emerald-600 bg-emerald-500/10 border-emerald-500/20" :
-                                    sessionData.finalReport.verdict === "POTENTIAL_MATCH" ? "text-blue-600 bg-blue-500/10 border-blue-500/20" :
+                                    sessionData.finalReport.verdict === "STRONG_MATCH" ? "text-emerald-400 bg-emerald-500/10 border-emerald-500/20" :
+                                    sessionData.finalReport.verdict === "POTENTIAL_MATCH" ? "text-blue-400 bg-blue-500/10 border-blue-500/20" :
                                     // INCOMPLETE means the run itself broke. It must never wear the
                                     // REJECT colour — that would read as a judgement on the candidate
                                     // when no judgement was actually reached.
-                                    sessionData.finalReport.verdict === "INCOMPLETE" ? "text-amber-700 bg-amber-500/10 border-amber-500/20" :
-                                    "text-rose-600 bg-rose-500/10 border-rose-500/20"
+                                    sessionData.finalReport.verdict === "INCOMPLETE" ? "text-amber-300 bg-amber-500/10 border-amber-500/20" :
+                                    "text-rose-400 bg-rose-500/10 border-rose-500/20"
                                 }`}>
                                     {sessionData.finalReport.verdict}
                                 </span>
@@ -1852,7 +1847,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
 
                         {(sessionData.finalReport.agent_errors || []).length > 0 && (
                             <div className="bg-amber-500/10 border border-amber-400/40 rounded-3xl p-6 sm:p-8 space-y-2 shadow-md">
-                                <h3 className="text-lg font-bold text-amber-700 dark:text-amber-300">
+                                <h3 className="text-lg font-bold text-amber-300 dark:text-amber-300">
                                     This run did not complete
                                 </h3>
                                 <p className="text-sm text-content-secondary leading-relaxed">
@@ -1883,7 +1878,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                     Verified Skills & Details
                                 </h3>
                                 <ul className="space-y-2.5">
-                                    {sessionData.finalReport.verified_skills.map((skill, idx) => (
+                                    {(sessionData.finalReport.verified_skills || []).map((skill, idx) => (
                                         <li key={idx} className="text-sm text-content-secondary leading-relaxed flex items-start gap-2.5">
                                             <span className="text-emerald-500 shrink-0 mt-0.5">&bull;</span>
                                             <span>{skill}</span>
@@ -1898,11 +1893,11 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                     <svg className="w-5 h-5 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
                                     Identified Gaps or Concerns
                                 </h3>
-                                {sessionData.finalReport.gaps_or_concerns.length === 0 ? (
+                                {(sessionData.finalReport.gaps_or_concerns || []).length === 0 ? (
                                     <p className="text-sm text-content-tertiary italic">No key concerns or gaps identified.</p>
                                 ) : (
                                     <ul className="space-y-2.5">
-                                        {sessionData.finalReport.gaps_or_concerns.map((gap, idx) => (
+                                        {(sessionData.finalReport.gaps_or_concerns || []).map((gap, idx) => (
                                             <li key={idx} className="text-sm text-content-secondary leading-relaxed flex items-start gap-2.5">
                                                 <span className="text-amber-500 shrink-0 mt-0.5">&bull;</span>
                                                 <span>{gap}</span>
@@ -1976,7 +1971,7 @@ export default function VettingSessionPage({ params }: { params: Promise<{ sessi
                                 verify the rest of the résumé in person.
                             </p>
                             <div className="grid grid-cols-1 gap-3">
-                                {sessionData.finalReport.interview_questions.map((q, idx) => {
+                                {(sessionData.finalReport.interview_questions || []).map((q, idx) => {
                                     // The structured list carries the claim linkage; the flat
                                     // string list is what older sessions stored, so fall back
                                     // to index-matching rather than dropping the extra context.

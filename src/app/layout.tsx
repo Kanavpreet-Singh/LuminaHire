@@ -32,8 +32,29 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    // suppressHydrationWarning: the inline script below sets data-theme on this
+    // element before React hydrates, so the server HTML and the live DOM
+    // legitimately differ on that one attribute.
+    <html lang="en" suppressHydrationWarning>
       <head>
+        {/*
+          Apply the saved theme BEFORE first paint.
+
+          Without this, the server sends <html lang="en"> with no data-theme, so
+          the page paints with :root's dark tokens; ThemeToggle then reads
+          localStorage in a useEffect — which only runs after hydration — and
+          flips to light. Every single page load flashed dark before settling,
+          for every light-mode user.
+
+          This has to be a plain synchronous <script> in <head>: next/script
+          strategies all run too late to beat the first paint, which is the
+          entire point.
+        */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem("stackmemo-theme");if(t==="light"||t==="dark"){document.documentElement.setAttribute("data-theme",t)}}catch(e){}})();`,
+          }}
+        />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=Saira+Stencil:ital,wght@0,100..900;1,100..900&display=swap" rel="stylesheet" />
