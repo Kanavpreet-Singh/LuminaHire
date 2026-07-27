@@ -98,7 +98,7 @@ export default function BatchResultsPage({ params }: { params: Promise<{ batchId
     if (error && !batch) {
         return (
             <div className="flex-1 bg-surface-primary flex flex-col justify-center items-center p-8 space-y-4">
-                <div className="p-6 bg-rose-500/10 border border-rose-500/20 text-rose-600 rounded-2xl text-center max-w-md">
+                <div className="p-6 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-2xl text-center max-w-md">
                     <h2 className="text-xl font-bold mb-2">Error Loading Batch</h2>
                     <p className="text-sm">{error}</p>
                 </div>

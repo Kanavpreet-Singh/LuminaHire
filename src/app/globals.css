@@ -1,5 +1,30 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+/* Inter is NOT imported here on purpose.
+   ------------------------------------------------------------------
+   layout.tsx already loads it through next/font/google, which self-hosts the
+   files and exposes them as --font-inter (see --font-sans below). This file
+   used to ALSO pull Inter from the Google Fonts CDN, which meant the same font
+   downloaded twice and, worse, did so as a CSS @import: the browser had to
+   fetch this stylesheet, parse it, discover the @import, and only then start a
+   third-party request — a serialised waterfall in front of first paint. Text
+   rendered in a fallback face and reflowed when Inter finally arrived.
+
+   Add fonts via next/font in layout.tsx, never as an @import here. */
 @import "tailwindcss";
+
+/* Bind Tailwind's `dark:` variant to THIS app's theme switch.
+   ------------------------------------------------------------------
+   Theming here is driven by `data-theme` on <html> (see ThemeToggle), and dark
+   is the default — light is the opt-in, set as data-theme="light".
+
+   Without this line Tailwind v4's `dark:` falls back to prefers-color-scheme,
+   which is a different signal entirely: a visitor whose OS is light but who
+   toggles the app to dark got light-mode `dark:` utilities on a dark surface,
+   and vice versa. Components written with `bg-white dark:bg-zinc-900` (the
+   chatbot, for one) simply ignored the toggle.
+
+   "Dark" is therefore defined as "not explicitly light", so the default state
+   and an explicit data-theme="dark" both count. */
+@custom-variant dark (&:not([data-theme="light"] *));
 
 /* Turbopack's generated CSS chunk order for Tailwind's responsive variants
    (md:flex, md:hidden, etc. vs the base .hidden/.flex utilities) is not
@@ -722,4 +747,108 @@ body {
 [data-theme="light"] .collapsible-closed,
 [data-theme="light"] .collapsible-open {
   background: rgba(245, 243, 255, 0.4);
+}
+
+/* ==============================================
+   PRACTICE FLOW — motion
+   One question on screen at a time, so the transitions carry the sense of
+   moving through an interview. Motion is used in three places only, each doing
+   a job: a question arriving, a score landing, and the queue advancing.
+   Everything else stays still on purpose.
+   ============================================== */
+
+@keyframes q-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes q-exit {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(-10px) scale(0.985); }
+}
+
+@keyframes score-pop {
+  0%   { opacity: 0; transform: scale(0.82); }
+  60%  { transform: scale(1.04); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes bar-grow {
+  from { transform: scaleX(0); }
+  to   { transform: scaleX(1); }
+}
+
+/* The waveform flourish: a voice trace that never sits still, used exactly
+   once (the Practice Studio hero) as the visual thesis of the page — this
+   product measures how you actually spoke, not just what you typed. Each bar
+   loops independently so the shape never repeats, which reads as "live"
+   rather than as a decorative pattern. */
+@keyframes wave-bar {
+  0%, 100% { transform: scaleY(var(--wave-min, 0.25)); }
+  50%      { transform: scaleY(var(--wave-max, 1)); }
+}
+.wave-bar {
+  animation: wave-bar 1.6s ease-in-out infinite;
+  transform-origin: center;
+}
+
+/* A soft breathing ring for the framing guide during preflight/recording —
+   quieter than a hard-edged static oval, and it gives the "hold still here"
+   instruction a pulse instead of a flat line. */
+@keyframes frame-breathe {
+  0%, 100% { opacity: 0.35; transform: scale(1); }
+  50%      { opacity: 0.6; transform: scale(1.015); }
+}
+.frame-breathe { animation: frame-breathe 2.8s ease-in-out infinite; }
+
+/* The countdown ring before recording starts. */
+@keyframes countdown-ring {
+  from { stroke-dashoffset: 0; }
+  to   { stroke-dashoffset: var(--ring-circumference, 283); }
+}
+
+/* The recording dot. Slower and softer than Tailwind's animate-pulse, which
+   reads as an alert rather than "we are rolling". */
+@keyframes rec-breathe {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.55; transform: scale(0.86); }
+}
+
+.q-enter { animation: q-rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.q-leaving { animation: q-exit 220ms ease-in both; }
+.score-enter { animation: score-pop 480ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.bar-enter { transform-origin: left; animation: bar-grow 620ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rec-dot { animation: rec-breathe 1.6s ease-in-out infinite; }
+
+/* Stagger children of an entering card so the eye lands on the question first,
+   then the controls — rather than the whole block appearing at once. */
+.q-stagger > * { animation: q-rise 420ms cubic-bezier(0.22, 1, 0.36, 1) both; }
+.q-stagger > *:nth-child(1) { animation-delay: 40ms; }
+.q-stagger > *:nth-child(2) { animation-delay: 100ms; }
+.q-stagger > *:nth-child(3) { animation-delay: 160ms; }
+.q-stagger > *:nth-child(4) { animation-delay: 220ms; }
+.q-stagger > *:nth-child(5) { animation-delay: 280ms; }
+
+/* ==============================================
+   REDUCED MOTION
+   This app had no prefers-reduced-motion handling at all, while running float,
+   pulse, shimmer, and spin animations on most pages. For a vestibular-disorder
+   user that is not a preference, it is a barrier — and this product already
+   takes the position that delivery metrics must never penalise someone for how
+   their body works. Same principle applies to the interface.
+
+   Animations are collapsed rather than removed: `both` fill modes mean an
+   element whose animation never runs would otherwise be stuck at its 0% frame
+   (opacity: 0), so duration goes to ~0 instead of `none`.
+   ============================================== */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  html { scroll-behavior: auto; }
 }

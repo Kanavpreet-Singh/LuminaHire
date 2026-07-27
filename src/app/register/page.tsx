@@ -145,8 +145,8 @@ export default function RegisterPage() {
                 <form onSubmit={handleSubmit} className="flex flex-col gap-5">
                     {error && (
                         <div className={showGoogleHint
-                            ? "form-warning-light py-3.5 px-4 rounded-md bg-warning-500/10 border border-warning-500/25 text-warning-600 dark:text-warning-300 text-[0.85rem] flex flex-col gap-3 animate-fadeInUp"
-                            : "py-3 px-4 rounded-md bg-danger-500/10 border border-danger-500/25 text-danger-600 dark:text-danger-400 text-[0.85rem]"
+                            ? "form-warning-light py-3.5 px-4 rounded-md bg-warning-500/10 border border-warning-500/25 text-warning-400 text-[0.85rem] flex flex-col gap-3 animate-fadeInUp"
+                            : "py-3 px-4 rounded-md bg-danger-500/10 border border-danger-500/25 text-danger-400 text-[0.85rem]"
                         }>
                             <span>{error}</span>
                             {showGoogleHint && (

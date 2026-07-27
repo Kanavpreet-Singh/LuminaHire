@@ -1,4 +1,7 @@
 import { createUploadthing, type FileRouter } from "uploadthing/next";
+import { UploadThingError } from "uploadthing/server";
+import { auth } from "@/lib/auth";
+import prisma from "@/lib/prisma";
 
 const f = createUploadthing();
 
@@ -19,6 +22,41 @@ export const ourFileRouter = {
       
       // Whatever is returned here is sent to the clientside `onClientUploadComplete` callback
       return { url: file.url };
+    }),
+
+  /**
+   * Practice-interview recordings.
+   *
+   * UNLIKE resumeUploader ABOVE, THIS MIDDLEWARE AUTHENTICATES. The resume
+   * route is deliberately public because a resume is attached during candidate
+   * signup, before a session exists. Inheriting that pattern here would put an
+   * unauthenticated media-upload endpoint on a public host — an open bucket
+   * with a URL. A recording is also personal in a way a submitted resume is
+   * not, so it is tied to a candidate at upload time.
+   */
+  mockVideoUploader: f({
+    video: { maxFileSize: "128MB", maxFileCount: 1 },
+    audio: { maxFileSize: "32MB", maxFileCount: 1 },
+  })
+    .middleware(async () => {
+      const session = await auth();
+      if (!session?.user || (session.user as any).role !== "CANDIDATE") {
+        throw new UploadThingError("Sign in as a candidate to upload a recording.");
+      }
+      const candidate = await prisma.candidate.findUnique({
+        where: { userId: session.user.id! },
+        select: { id: true },
+      });
+      if (!candidate) {
+        throw new UploadThingError("Complete your candidate profile first.");
+      }
+      return { candidateId: candidate.id };
+    })
+    .onUploadComplete(async ({ metadata, file }) => {
+      // The row is created by POST /api/mock/[mockId]/answer, which also
+      // dispatches analysis. Returning the key lets that route store
+      // mediaPublicId for the retention sweep to delete against later.
+      return { url: file.url, key: file.key, candidateId: metadata.candidateId };
     }),
 } satisfies FileRouter;
 

@@ -20,6 +20,7 @@ Production: [luminahire.tech](https://luminahire.tech) · Stack: Next.js 16 · R
 - [Human-in-the-loop state machine](#human-in-the-loop-state-machine)
 - [Batch mode: the Hiring Committee](#batch-mode-the-hiring-committee)
 - [Semantic matching with pgvector](#semantic-matching-with-pgvector)
+- [Interview Kits and the Practice Studio](#interview-kits-and-the-practice-studio)
 - [Resilience: how a stateless HTTP UI drives a long-running pipeline](#resilience-how-a-stateless-http-ui-drives-a-long-running-pipeline)
 - [Observability and cost tracking](#observability-and-cost-tracking)
 - [Data model](#data-model)
@@ -396,6 +397,56 @@ Two complementary layers, both fully optional:
 
 ---
 
+## Interview Kits and the Practice Studio
+
+Two surfaces built on top of the pipeline, one for each side of the interview. Full design: [`docs/interview-practice-design.md`](docs/interview-practice-design.md).
+
+### The Interview Kit (recruiter)
+
+Turns a completed session into a runnable interview. The pipeline's whole thesis is that *"we couldn't verify this"* becomes *"walk me through the caching layer you built"* — the Kit is where that actually lands. It allocates interview minutes by information value rather than claim order: `CONTRADICTED` claims first (a neutral opener plus a follow-up that resolves it either way), then `UNVERIFIABLE` claims that matter to the JD, and **never** a question about something already `VERIFIED` — re-litigating settled evidence wastes the slot and tells the candidate their materials weren't read. That rule is enforced in Python (`_sanitize_kit`), not left to the prompt.
+
+<img src="docs/screenshots/09-interview-kit.png" alt="Interview Kit: a runnable interview generated from a completed vetting session, with a recruiter-set instruction and slot length" width="800">
+
+Each core question carries a ladder that gets progressively harder to answer from a memorized story (`what broke` → `which tradeoff` → `a specific number`, since a fabricated number is cheap to say and expensive to sustain) and a rubric of what strong, thin, and disqualifying answers contain. Interviewers rate answers 1–5 in the UI as they go, which is what makes **[Calibration](src/app/vetting/calibration/page.tsx)** possible:
+
+<img src="docs/screenshots/10-calibration.png" alt="Calibration dashboard showing how automated claim rulings held up against interviewer ratings" width="800">
+
+`(claim, automated verdict, human outcome)` triples are the only data that can ever answer whether the rulings are right — in particular the false-`CONTRADICTED` rate, the most damaging output the system can produce.
+
+### The Practice Studio (candidate)
+
+The first candidate-facing surface. One question is shown at a time — an interview is a sequence you move through, not a form you fill in, and showing the whole list up front invites skimming ahead and rehearsing, the exact habit that makes people worse in the room. Skipping is always available and never penalized: someone drilling system design shouldn't have to answer a warmup to get there.
+
+<img src="docs/screenshots/03-practice-questions.png" alt="Practice question queue for a role, with recording/typing mode selection and consent" width="800">
+
+**The queue has no fixed length.** When it runs out, the candidate picks a category — behavioral, technical, project, system design, motivation — and gets three more, generated on the spot and scoped to that candidate alone (`PracticeQuestion.candidateId`), so one person topping up doesn't rewrite what every other applicant practices against.
+
+> **The invariant the whole feature is built around:** practice questions are generated from the **job posting** (and, for one question, the candidate's **own résumé**) — never from a vetting session's claims, verdicts, or Interview Kit.
+
+Otherwise a candidate discovers which of their claims came back `CONTRADICTED` and rehearses a cover story for exactly that gap: the product coaching people through its own detection. Enforcement is structural, not prompt-level — `PracticeSet` has no foreign key to `VettingSession`, `generate_practice_set(job)` has no parameter a session could arrive through, and the FastAPI request model has no field to receive one. The only personalization is *retrieval*: the published set is re-ordered so the competencies a candidate's own résumé covers least come first.
+
+<img src="docs/screenshots/05-recorder-preflight.png" alt="Recorder preflight: mic level, framing guide, and live face-tracking checks before recording starts" width="800">
+
+Recording runs a full preflight — mic level, framing, live face-tracking — before anything is captured, because the dominant failure mode in every video-interview product is discovering after a three-minute take that the mic was on the wrong device. *(The green test pattern is Chrome's synthetic fake-camera signal, used because this screenshot came from a headless capture with no real camera or human face — not a product limitation.)*
+
+**Scoring splits measurement from judgment**, for the reason `agents.py` already learned the hard way. Ask a model how many times someone paused and it returns a confident integer it did not count — the same failure as the `"1113 >= 1000 → VERIFIED"` rationale attached to a `CONTRADICTED` label. So VAD, prosody, and face aggregation compute every delivery and presence number; a fixed band table calibrates them (the same move `calibrateScore()` makes for cosine similarity); and the LLM judges only content and language, receiving the numbers as given facts.
+
+<img src="docs/screenshots/08-answer-scored.png" alt="A scored answer: content/delivery/language/presence bars, the answer ribbon, and a templated delivery paragraph with concrete next-take advice" width="800">
+
+Every figure a candidate reads — pace, pause count, timestamps, camera-facing ratio — is **templated from a measurement, never generated** (`python/media/narrate.py`). The "shape of your answer" ribbon plots the same measurements over time: green for speaking, amber for a stall over 2.5s, and a facing/away band for camera contact, so a candidate can click a timestamp and watch the exact moment rather than just read a count.
+
+**Expression is read as continuous valence/arousal, not discrete emotion.** A 7-class "happy/sad/angry" classifier tops out around 75% accuracy even on curated benchmarks (AffectNet), the datasets it trains on are almost entirely *acted* emotion (actors performing on cue), and reading discrete emotional states off a face has real, published racial bias — Black faces score as angrier than white faces for the same smile. Inferring emotion in an employment context is also prohibited outright under Article 5 of the EU AI Act, not merely regulated.
+
+So `python/media/affect.py` instead regresses **valence** (unpleasant↔pleasant) and **arousal** (calm↔activated) from FACS-adjacent facial action units MediaPipe already extracts client-side — geometry, not pixels, which reduces (not eliminates) the same bias pathway. A linear heuristic ships by default; `scripts/train_affect_model.py` trains a small MLP on labeled data (AFEW-VA, AffectNet's V-A split) and reports CCC — the field's actual metric — against the published Aff-Wild2 baseline, and refuses to recommend shipping weights that don't beat the heuristic. The result is never an emotion label. It's a measured line on the ribbon and one sentence of description — *"you came across as energetic, though fairly serious, and you flattened out toward the end"* — never a confidence score on an inner state nobody measured.
+
+**This signal is structurally incapable of reaching a hiring decision.** It has no band in `scoring.py`, so it cannot move a candidate's score; and results are candidate-private, with sharing to an application opt-in and passed through an **allowlist** serializer that carries content scores and the transcript only. Delivery, presence, and every expression metric never cross that boundary — they correlate with accent, speech disabilities, and equipment quality, which makes them coaching signal, not hiring signal. An automated test (`scripts/e2e-practice.mjs`) asserts the shared payload contains no `valence`, `arousal`, `delivery`, or `presence` field on every run.
+
+Media analysis is opt-in at build time (`--build-arg WITH_MEDIA=1`). Without it the service still boots and `GET /mock/capabilities` reports what's missing so the UI offers typed answers instead; absent metrics are dropped from the score rather than counted as zero.
+
+<img src="docs/screenshots/11-practice-sets-admin.png" alt="Recruiter view of a role's practice questions, generated from the job posting alone" width="800">
+
+---
+
 ## Data model
 
 PostgreSQL via Prisma. `users` carries a `RECRUITER | CANDIDATE` discriminator; both `job_postings` and `candidates` carry a `vector(1536)` embedding.
@@ -410,7 +461,17 @@ erDiagram
     Application ||--o| VettingSession : ""
     JobPosting ||--o{ VettingBatch : ""
     VettingBatch ||--o{ VettingSession : "committee members"
+    VettingSession ||--o| InterviewKit : "derived"
+    InterviewKit ||--o{ InterviewKitQuestion : ""
+    JobPosting ||--o{ PracticeSet : "candidate-facing"
+    PracticeSet ||--o{ PracticeQuestion : ""
+    PracticeSet ||--o{ MockInterview : ""
+    Candidate ||--o{ MockInterview : "practice attempts"
+    MockInterview ||--o{ MockAnswer : ""
+    MockInterview ||--o| MockInterviewShare : "opt-in, content only"
 ```
+
+Note what is **absent** from that diagram: there is no edge between `PracticeSet` and `VettingSession`. Practice questions are resolved by `jobId` alone, and the missing join is the enforcement — see [Interview Kits and the Practice Studio](#interview-kits-and-the-practice-studio).
 
 | Model | Notable fields |
 |---|---|
@@ -420,6 +481,13 @@ erDiagram
 | `Application` | `matchScore`, `aiSummary`, `aiPros[]`, `aiCons[]`, unique on `(candidateId, jobId)` |
 | `VettingSession` | `status`, `pipelineMode`, and the full audit trail as JSON: `researchPlan`, `researchResults`, `evaluation`, `finalReport`, `qaHistory`, `logs`, `usage`, plus `batchId`/`batchRank` |
 | `VettingBatch` | `targetHireCount`, `matchThreshold`, `recruiterInstructions`, `poolSize`/`dispatchedCount`/`skippedCount`, `topSessionIds`, `rankingDetails` |
+| `InterviewKit` | `instructions`, `agenda`, `referenceChecks`, one per completed `VettingSession` |
+| `InterviewKitQuestion` | `kind`, `followUps[]`, `rubric`, `targetsClaimId` + `claimStatus` (snapshotted, so a printed kit can't change meaning under the interviewer), and the live capture fields `askedAt`/`interviewerRating`/`interviewerNotes` |
+| `PracticeSet` | `version`, `status`, `generatedFrom` (a single-member enum, so provenance is explicit at the schema level) |
+| `PracticeQuestion` | `category`, `competency`, `targetSeconds`, `rubric` authored with the question |
+| `MockInterview` | `mode` (VIDEO/AUDIO/TEXT), `accessibilityMode`, `overallScore`, `dimensionScores`, `coaching` |
+| `MockAnswer` | `attemptNo`/`isFinal` (retakes are first-class), `transcript`, `metrics`, `faceTimeline` (1 Hz — the raw ~15 Hz track is never persisted), `analysis`, `analysisAttempts`, `expiresAt` |
+| `MockInterviewShare` | `scope` fixed to `CONTENT_ONLY`, `revokedAt` |
 
 Each pipeline stage's raw output is persisted as JSON on the session, which is what makes the completed-session stage tabs a genuine audit trail — the recruiter reads the actual artifact each agent produced, not a summary of it.
 
@@ -448,6 +516,17 @@ Each pipeline stage's raw output is persisted as JSON on the session, which is w
 | `POST` | `/api/vet/session/[id]/resume` · `/restart` | Crash recovery / full re-run |
 | `GET` | `/api/vet/session/[id]` · `/api/vet/sessions` | Read (polls through to Python) |
 | `POST` | `/api/vet/batch` | Start a Hiring Committee run |
+| `GET/POST` | `/api/vet/session/[id]/kit` | Read / build the Interview Kit from a completed session |
+| `PATCH` | `/api/kit/question/[id]` | Live interview note capture (asked, rating, notes) |
+| `GET` | `/api/kit/calibration` | How the pipeline's rulings held up in real interviews |
+| `GET/POST` | `/api/jobs/[id]/practice-set` | A job's candidate practice questions (lazy-generates, versioned) |
+| `GET/POST` | `/api/mock` · `/api/mock/[id]` | Start, list, read, delete a practice attempt |
+| `POST` | `/api/mock/[id]/answer` | Submit a typed or recorded answer (retakes create a new attempt) |
+| `POST` | `/api/mock/[id]/finalize` | Cross-answer session coaching |
+| `GET/POST/DELETE` | `/api/mock/[id]/share` | Preview, grant, revoke a content-only share |
+| `POST` | `/api/mock/[id]/pin` | Keep recordings past the 30-day retention window |
+| `GET` | `/api/mock/capabilities` | What the analysis service on this deployment can measure |
+| `GET` | `/api/vet/session/[id]/shared-practice` | The recruiter end of a candidate's opt-in share |
 | `GET` | `/api/vet/batch/[batchId]` | Batch status, members, and final ranking |
 
 ### FastAPI service
@@ -466,6 +545,14 @@ Each pipeline stage's raw output is persisted as JSON on the session, which is w
 | `POST` | `/vet/batch/rank` | Pairwise round-robin tournament |
 | `POST` | `/vet/qa` | Grounded Q&A over accumulated context |
 | `GET` | `/vet/status/{session_id}` | Poll phase, partial results, logs, usage |
+| `POST` | `/interview/kit` | Build a runnable interview from a completed session's claim verdicts |
+| `POST` | `/practice/generate` | A job's practice set — **takes a job and nothing else** |
+| `POST` | `/practice/personal-question` | One question from a candidate's own résumé text |
+| `POST` | `/mock/judge-answer` | Score one typed answer (content + language) |
+| `POST` | `/mock/analyze-async` | Full media analysis of one recording → `202` |
+| `GET` | `/mock/status/{answer_id}` | Poll a media analysis |
+| `POST` | `/mock/finalize` | Cross-answer session coaching |
+| `GET` | `/mock/capabilities` | ffmpeg / ASR / prosody / VAD availability on this box |
 | `GET` | `/health` | Liveness |
 
 All `*-async` endpoints return `202` immediately and reject a duplicate in-flight run for the same session with `409`.
@@ -612,20 +699,30 @@ LuminaHire/
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── auth/            NextAuth v5 handlers + provider detection
-│   │   │   ├── jobs/            Job CRUD + pgvector matches
+│   │   │   ├── jobs/            Job CRUD, pgvector matches, practice sets
+│   │   │   ├── kit/             Interview-kit notes + calibration
+│   │   │   ├── mock/            Practice attempts, answers, share, capabilities
 │   │   │   ├── profile/         Candidate profile + resume ingestion
-│   │   │   ├── uploadthing/     Resume upload file router
-│   │   │   └── vet/             Vetting pipeline + batch orchestration
+│   │   │   ├── uploadthing/     Resume + practice-recording file routers
+│   │   │   └── vet/             Vetting pipeline, batch orchestration, kits
 │   │   ├── dashboard/           Recruiter dashboard, job creation
 │   │   ├── jobs/                Candidate-facing job board
-│   │   ├── vetting/             Session UI, stage review, batch results
+│   │   ├── practice/            Practice Studio: browse, record, results
+│   │   ├── vetting/             Session UI, stage review, batch, calibration
 │   │   ├── login/ register/     Auth pages
 │   │   └── profile/             Candidate profile editor
-│   ├── components/              Navbar, RecruiterDashboard, ThemeToggle, …
+│   ├── components/
+│   │   ├── InterviewKit.tsx     Kit UI + live interview note capture
+│   │   ├── practice/
+│   │   │   ├── Recorder.tsx     Preflight, MediaPipe face track, retakes
+│   │   │   └── AnswerRibbon.tsx The shape of an answer over time
+│   │   └── …                    Navbar, RecruiterDashboard, ThemeToggle
 │   └── lib/
 │       ├── auth.ts              NextAuth config, OAuth account linking
 │       ├── matches.ts           pgvector query + score calibration
 │       ├── vetting.ts           Poll-through, usage merge, batch finalizer
+│       ├── interview.ts         Practice sets, media dispatch, share allowlist
+│       ├── mock-score.ts        Session-level score aggregation
 │       ├── rate-limit.ts        In-memory IP limiter for guest usage
 │       └── cloudinary.ts        Signed direct uploads
 ├── python/
@@ -636,6 +733,15 @@ LuminaHire/
 │   ├── llm_client.py            Structured generation + provider failover
 │   ├── verification.py          Identity matching + claim-status vocabulary
 │   ├── tracing.py               Langfuse spans + cost accounting
+│   ├── interview_kit.py         Claim-triaged interview kits with ladders
+│   ├── practice.py              Job-only practice sets (see THE INVARIANT)
+│   ├── answer_judge.py          Content/language judging + coaching assembly
+│   ├── scoring.py               Calibration bands + dimension aggregation
+│   ├── media/
+│   │   ├── pipeline.py          demux → VAD → ASR → prosody → face → judge
+│   │   ├── measure.py           Every delivery/presence number, by arithmetic
+│   │   ├── asr.py               Pluggable faster-whisper | gemini
+│   │   └── vad.py               ffmpeg demux, Silero VAD, filler cross-check
 │   └── tools/
 │       ├── catalog.py           Tool declarations, dispatch, guardrails
 │       ├── github_tool.py       Profile, repos, code-volume tech stack
@@ -643,10 +749,14 @@ LuminaHire/
 │                                CodeChef, LinkedIn, Medium, Dev.to,
 │                                Stack Overflow, npm, Scholar, arXiv,
 │                                portfolio, web search
-├── scripts/                     DB inspection + seed-data cleanup helpers
+├── scripts/                     DB inspection, seed cleanup, practice-media
+│                                retention sweep (expire-practice-media.mjs)
+├── docs/
+│   └── interview-practice-design.md  Interview Kit + Practice Studio design
 ├── prisma/
 │   ├── schema.prisma            Models + pgvector columns
-│   └── migrations/              SQL migration history
+│   └── migrations/              SQL history (this DB uses `db push` — read
+│                                the header in the newest migration first)
 ├── deploy/nginx.conf            Reverse proxy config for the EC2 host
 ├── .github/workflows/deploy.yml CI/CD → GHCR → EC2
 ├── Dockerfile                   Multi-stage Next.js standalone build

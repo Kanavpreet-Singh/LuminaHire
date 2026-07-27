@@ -70,12 +70,12 @@ function formatDate(dateInput: string): string {
 }
 
 function getStatusBadgeClass(status: string): string {
-    if (status === "COMPLETED") return "bg-emerald-500/10 text-emerald-600 border-emerald-500/20";
+    if (status === "COMPLETED") return "bg-emerald-500/10 text-emerald-400 border-emerald-500/20";
     if (status === "RESEARCHING" || status === "EVALUATING" || status === "RUNNING" || status === "DISPATCHING") {
-        return "bg-blue-500/10 text-blue-600 border-blue-500/20 animate-pulse";
+        return "bg-blue-500/10 text-blue-400 border-blue-500/20 animate-pulse";
     }
-    if (status === "FAILED") return "bg-rose-500/10 text-rose-600 border-rose-500/20";
-    return "bg-amber-500/10 text-amber-600 border-amber-500/20";
+    if (status === "FAILED") return "bg-rose-500/10 text-rose-400 border-rose-500/20";
+    return "bg-amber-500/10 text-amber-400 border-amber-500/20";
 }
 
 function getSessionCta(status: string): string {
@@ -330,9 +330,19 @@ export default function VettingSessionsClient({
                         <h2 className="text-xl font-black text-content-primary">Normal Sessions</h2>
                         <p className="text-xs text-content-tertiary mt-1">Single candidate HITL recruit sessions.</p>
                     </div>
-                    <span className="rounded-full border border-border-default bg-surface-primary px-3 py-1 text-xs font-bold text-content-tertiary">
-                        {sessions.length}
-                    </span>
+                    <div className="flex items-center gap-3">
+                        {/* Where the interview ratings written into kits come back
+                            as an answer about whether the rulings were right. */}
+                        <Link
+                            href="/vetting/calibration"
+                            className="rounded-xl border border-border-default bg-surface-tertiary px-4 py-2 text-xs font-bold text-content-secondary no-underline transition-colors hover:bg-surface-secondary"
+                        >
+                            Calibration
+                        </Link>
+                        <span className="rounded-full border border-border-default bg-surface-primary px-3 py-1 text-xs font-bold text-content-tertiary">
+                            {sessions.length}
+                        </span>
+                    </div>
                 </div>
 
                 {sessions.length === 0 ? (

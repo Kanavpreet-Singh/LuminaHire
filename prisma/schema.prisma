@@ -23,13 +23,13 @@ model User {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
-  role      UserRole @default(CANDIDATE)
+  role      UserRole   @default(CANDIDATE)
   candidate Candidate?
 
   companyName String? // Used if role is RECRUITER
   jobPostings JobPosting[] // Used if role is RECRUITER
 
-  accounts    Account[]
+  accounts Account[]
 
   @@map("users")
 }
@@ -44,23 +44,25 @@ enum UserRole {
 // ----------------------------------------------------------------------
 
 model JobPosting {
-  id           String     @id @default(cuid())
+  id           String    @id @default(cuid())
   title        String
-  description  String     @db.Text
-  requirements String?    @db.Text
-  status       JobStatus  @default(OPEN)
-  
-  recruiterId  String
-  recruiter    User       @relation(fields: [recruiterId], references: [id], onDelete: Cascade)
-  
+  description  String    @db.Text
+  requirements String?   @db.Text
+  status       JobStatus @default(OPEN)
+
+  recruiterId String
+  recruiter   User   @relation(fields: [recruiterId], references: [id], onDelete: Cascade)
+
   // Vector embedding for semantic matching (1536 dimensions in database).
-  embedding    Unsupported("vector(1536)")?
+  embedding Unsupported("vector(1536)")?
 
-  applications Application[]
-  batches      VettingBatch[]
+  applications   Application[]
+  batches        VettingBatch[]
+  practiceSets   PracticeSet[]
+  mockInterviews MockInterview[]
 
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("job_postings")
 }
@@ -72,136 +74,160 @@ enum JobStatus {
 }
 
 model Candidate {
-  id          String   @id @default(cuid())
-  
-  userId      String?  @unique
-  user        User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  name        String
-  email       String   @unique
-  phone       String?
-  
-  resumeUrl   String?  @db.Text
-  resumeText  String?  @db.Text
-  skills      String[]
-  
-  linkedinUrl String?  @db.Text
-  githubUrl   String?  @db.Text
-  
+  id String @id @default(cuid())
+
+  userId String? @unique
+  user   User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name  String
+  email String  @unique
+  phone String?
+
+  resumeUrl  String?  @db.Text
+  resumeText String?  @db.Text
+  skills     String[]
+
+  linkedinUrl String? @db.Text
+  githubUrl   String? @db.Text
+
   // Vector embedding for semantic search (1536 dimensions in database).
-  embedding   Unsupported("vector(1536)")? 
-  
+  embedding Unsupported("vector(1536)")?
+
   applications Application[]
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+
+  // Cached PERSONAL practice question, generated from this candidate's OWN
+  // resume only (never from a vetting session -- see docs/interview-practice-design.md,
+  // "The invariant that shapes everything"). Reused across every job the
+  // candidate practices for, so it costs one LLM call per resume, ever.
+  // Shape: {prompt, competency, targetSeconds, rubric}.
+  personalQuestion     Json?
+  // SHA-256 of the resume text the cached question was generated from. A
+  // lightly-edited re-upload that hashes the same must not burn another call.
+  personalQuestionHash String?
+
+  mockInterviews    MockInterview[]
+  // The candidate-scoped PERSONAL practice question, once it has been
+  // materialized as an answerable row.
+  personalQuestions PracticeQuestion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("candidates")
 }
 
 model Application {
-  id          String   @id @default(cuid())
-  
+  id String @id @default(cuid())
+
   candidateId String
   candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
-  
-  jobId       String
-  job         JobPosting @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  
-  status      AppStatus @default(PENDING)
-  
-  matchScore  Float?
-  aiSummary   String?    @db.Text
-  aiPros      String[]
-  aiCons      String[]
-  
+
+  jobId String
+  job   JobPosting @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  status AppStatus @default(PENDING)
+
+  matchScore Float?
+  aiSummary  String?  @db.Text
+  aiPros     String[]
+  aiCons     String[]
+
   vettingSession VettingSession?
-  
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+
+  // Mock-interview attempts the candidate chose to attach to this application.
+  // Content-only by construction -- see MockInterviewShare.
+  mockShares MockInterviewShare[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([candidateId, jobId])
   @@map("applications")
 }
 
 model VettingSession {
-  id            String   @id @default(cuid())
-  applicationId String   @unique
+  id            String      @id @default(cuid())
+  applicationId String      @unique
   application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
-  
-  status        VettingSessionStatus @default(PLANNING)
+
+  status VettingSessionStatus @default(PLANNING)
 
   // HITL sessions pause at AWAITING_RESEARCH_INPUT/AWAITING_EVALUATION_APPROVAL;
   // AUTONOMOUS sessions (batch "Hiring Committee" runs) skip both checkpoints.
   // Crash-recovery (resume) reads this so a restarted HITL run still pauses
   // for review instead of silently completing.
-  pipelineMode  VettingPipelineMode @default(HITL)
+  pipelineMode VettingPipelineMode @default(HITL)
 
   // Store the research plan (JSON)
-  researchPlan  Json?
+  researchPlan Json?
 
   // Store the gathered research results (JSON)
   researchResults Json?
 
   // Store the evaluator's raw findings (dimension scores, evidence, gaps)
   // pending human approval before the report writer runs.
-  evaluation    Json?
+  evaluation Json?
 
   // Store the final consolidated report / details (JSON)
-  finalReport   Json?
+  finalReport Json?
 
   // Q&A history over the accumulated research context (list of {question, answer, askedAt})
-  qaHistory     Json?
+  qaHistory Json?
 
   // Logs of the agent session (JSON array of strings)
-  logs          Json?
+  logs Json?
 
   // Batch "Hiring Committee" membership. A session created by a batch run
   // points here; single-candidate sessions leave it null.
-  batchId       String?
-  batch         VettingBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  batchId               String?
+  batch                 VettingBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   // 1..N once the owning batch is finalized and this session was a winner;
   // null otherwise (not selected, batch not finalized, or not a batch run).
-  batchRank     Int?
+  batchRank             Int?
   // Denormalized copy of the batch's recruiter instructions, set at creation,
   // so restart/resume routes can rebuild the Python job payload without a join.
-  recruiterInstructions String? @db.Text
+  recruiterInstructions String?       @db.Text
 
   // Accumulated LLM token/cost usage across every pipeline phase this session
   // has gone through (initial run, HITL resumes, follow-ups, Q&A). Shape:
   // {prompt_tokens, completion_tokens, cost_usd, calls: [{model, prompt_tokens,
   // completion_tokens, cost_usd}]}. Populated by the Python service's tracing
   // module (see python/tracing.py) and merged in by src/lib/vetting.ts.
-  usage         Json?
+  usage Json?
 
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  // Derived, post-completion artifact: the runnable interview built from this
+  // session's claim verdicts. Generated on demand (like qaHistory), never as a
+  // graph stage, so its failure can never fail a vetting run.
+  interviewKit InterviewKit?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@map("vetting_sessions")
 }
 
 model VettingBatch {
-  id                    String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  jobId                 String
-  job                   JobPosting @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  jobId String
+  job   JobPosting @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   // Denormalized for cheap ownership checks on the batch status route.
-  recruiterId           String
+  recruiterId String
 
-  targetHireCount       Int                 // "N" -- how many to hire
-  matchThreshold        Float               // calibrated 0-100 semantic cutoff (default 50)
-  recruiterInstructions String?  @db.Text   // free-text priority instructions, obeyed by all 3 agents
+  targetHireCount       Int // "N" -- how many to hire
+  matchThreshold        Float // calibrated 0-100 semantic cutoff (default 50)
+  recruiterInstructions String? @db.Text // free-text priority instructions, obeyed by all 3 agents
 
-  status                VettingBatchStatus @default(DISPATCHING)
+  status VettingBatchStatus @default(DISPATCHING)
 
-  poolSize              Int      @default(0) // candidates over threshold, capped by pool cap
-  dispatchedCount       Int      @default(0) // new sessions created + dispatched
-  skippedCount          Int      @default(0) // pre-existing non-terminal sessions left mid-flight
+  poolSize        Int @default(0) // candidates over threshold, capped by pool cap
+  dispatchedCount Int @default(0) // new sessions created + dispatched
+  skippedCount    Int @default(0) // pre-existing non-terminal sessions left mid-flight
 
   // Ordered array of winning VettingSession ids (rank 1..N). Written exactly
   // once by the finalizer; mirror of VettingSession.batchRank for a cheap read.
-  topSessionIds         Json?
+  topSessionIds Json?
 
   // Pairwise round-robin tournament results for the top-by-absolute-score
   // shortlist (see python/agents.py's run_pairwise_tournament and
@@ -209,15 +235,15 @@ model VettingBatch {
   // matches_played, matches: [{opponent, opponent_name, outcome, rationale}]}}.
   // Null for batches finalized before this existed, or with too few COMPLETED
   // members to run a tournament (fewer than 2).
-  rankingDetails        Json?
+  rankingDetails Json?
 
-  finalizedAt           DateTime?
-  errorMessage          String?  @db.Text
+  finalizedAt  DateTime?
+  errorMessage String?   @db.Text
 
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  sessions              VettingSession[]
+  sessions VettingSession[]
 
   @@map("vetting_batches")
 }
@@ -273,4 +299,319 @@ model Account {
 
   @@unique([provider, providerAccountId])
   @@map("accounts")
+}
+
+// ----------------------------------------------------------------------
+// INTERVIEW KITS (recruiter) & PRACTICE (candidate)
+// Design: docs/interview-practice-design.md
+//
+// THE INVARIANT: PracticeSet has no foreign key to VettingSession, and none
+// may ever be added. Practice questions are generated from the job posting
+// (and, for the one PERSONAL question, the candidate's own resume) — never
+// from a vetting session's claims, verdicts, or Interview Kit. A candidate
+// must not be able to learn which of their claims came back CONTRADICTED and
+// rehearse a cover story for it, and a recruiter's questions must not leak
+// into a take-home. The absent join is the enforcement; prompt text is not a
+// security boundary.
+// ----------------------------------------------------------------------
+
+model InterviewKit {
+  id               String         @id @default(cuid())
+  vettingSessionId String         @unique
+  vettingSession   VettingSession @relation(fields: [vettingSessionId], references: [id], onDelete: Cascade)
+
+  status          KitStatus @default(READY)
+  // Free-text recruiter steer used at generation ("30-minute screen", "focus
+  // on system design"). Retained so a regeneration is reproducible.
+  instructions    String?   @db.Text
+  // [{section, minutes, questionIds[]}] -- the time-boxed running order.
+  agenda          Json?
+  // Routed from the planner's company_vetting: questions for a former manager
+  // on a reference call, NOT for the candidate in the interview.
+  referenceChecks Json?
+  usage           Json?
+  errorMessage    String?   @db.Text
+
+  questions InterviewKitQuestion[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("interview_kits")
+}
+
+model InterviewKitQuestion {
+  id    String       @id @default(cuid())
+  kitId String
+  kit   InterviewKit @relation(fields: [kitId], references: [id], onDelete: Cascade)
+
+  order    Int
+  question String          @db.Text
+  kind     KitQuestionKind @default(CLAIM_PROBE)
+
+  // Points at claim_verdicts[].id inside the session's evaluation JSON.
+  // Deliberately a plain string, not an FK: claims have always lived in a JSON
+  // blob, and promoting them to a table to satisfy referential integrity here
+  // would be a large migration in service of one nullable pointer.
+  targetsClaimId String?
+  // Snapshot of that claim's status at generation time. Denormalized because a
+  // session can be re-run and a verdict can change -- a kit printed for
+  // tomorrow's interview must not silently change meaning underneath the
+  // interviewer.
+  claimStatus    String?
+
+  why            String        @default("") @db.Text
+  // The L2..L4 ladder, in order. Each rung is harder to answer from a
+  // memorized narrative than the last.
+  followUps      String[]
+  // {strong[], weak[], disqualifying[], note}
+  rubric         Json?
+  difficulty     KitDifficulty @default(CORE)
+  timeBoxMinutes Int?
+
+  // Written live from the Kit UI during the interview. This is what produces
+  // (claim, automated verdict, human outcome) triples -- the only data that can
+  // ever tell us whether the verification pipeline's rulings are actually right.
+  askedAt           DateTime?
+  interviewerRating Int?
+  interviewerNotes  String?   @db.Text
+
+  @@index([kitId, order])
+  @@map("interview_kit_questions")
+}
+
+enum KitStatus {
+  GENERATING
+  READY
+  FAILED
+}
+
+enum KitDifficulty {
+  WARMUP
+  CORE
+  STRETCH
+}
+
+enum KitQuestionKind {
+  CONTRADICTION
+  CLAIM_PROBE
+  JD_GAP
+  DEPTH
+  BEHAVIORAL
+}
+
+model PracticeSet {
+  id    String     @id @default(cuid())
+  jobId String
+  job   JobPosting @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  version       Int                @default(1)
+  status        PracticeSetStatus  @default(DRAFT)
+  // Single-member enum today. It exists so provenance is explicit at the schema
+  // level: any future source must be added deliberately and reviewably rather
+  // than slipping in as a prompt change. See THE INVARIANT above.
+  generatedFrom PracticeProvenance @default(JOB_ONLY)
+
+  publishedAt DateTime?
+  usage       Json?
+
+  questions  PracticeQuestion[]
+  interviews MockInterview[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([jobId, version])
+  @@map("practice_sets")
+}
+
+model PracticeQuestion {
+  id    String      @id @default(cuid())
+  setId String
+  set   PracticeSet @relation(fields: [setId], references: [id], onDelete: Cascade)
+
+  // Null for the shared, job-derived questions every applicant sees.
+  //
+  // Set only on the single PERSONAL question, which is generated from ONE
+  // candidate's own resume and must therefore be visible to that candidate
+  // alone -- showing "walk me through the ingestion rewrite you built at Acme"
+  // to a different applicant would leak one candidate's resume into another's
+  // practice session. Reads filter on `candidateId: null OR candidateId: me`.
+  //
+  // This is still not a vetting-session link: a resume is something the
+  // candidate wrote about themselves. See THE INVARIANT above.
+  candidateId String?
+  candidate   Candidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  order         Int
+  prompt        String           @db.Text
+  category      PracticeCategory @default(BEHAVIORAL)
+  // The JD skill this question exercises. Used to re-order the published set
+  // against the candidate's own resume -- retrieval, not generation, so
+  // personalization costs nothing and can't leak session data.
+  competency    String           @default("")
+  targetSeconds Int              @default(120)
+  // {must_cover[], strong_signals[], common_mistakes[]} -- authored WITH the
+  // question so the judge scores against a fixed, inspectable standard instead
+  // of improvising one per submission.
+  rubric        Json?
+  // Shown after answering, as self-study. Never used to score.
+  followUpHints String[]
+
+  answers MockAnswer[]
+
+  @@index([setId, order])
+  @@map("practice_questions")
+}
+
+enum PracticeSetStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum PracticeProvenance {
+  JOB_ONLY
+}
+
+enum PracticeCategory {
+  ROLE_MOTIVATION
+  PROJECT_WALKTHROUGH
+  BEHAVIORAL
+  TECHNICAL_CONCEPT
+  SYSTEM_DESIGN
+  PERSONAL
+}
+
+model MockInterview {
+  id String @id @default(cuid())
+
+  candidateId   String
+  candidate     Candidate   @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  jobId         String
+  job           JobPosting  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  practiceSetId String
+  practiceSet   PracticeSet @relation(fields: [practiceSetId], references: [id], onDelete: Cascade)
+
+  status MockStatus @default(CREATED)
+  mode   MockMode   @default(TEXT)
+
+  // Candidate-set. Zeroes the presence and/or delivery dimension weights. No
+  // reason is requested and none is stored -- the metrics correlate with
+  // speech disabilities, accent, and equipment quality, so opting out must
+  // cost nothing and disclose nothing.
+  accessibilityMode Boolean @default(false)
+
+  overallScore    Float?
+  dimensionScores Json?
+  // Session-level narrative: cross-answer patterns a single answer can't show,
+  // top fixes, and the delta against the candidate's previous session.
+  coaching        Json?
+  usage           Json?
+  errorMessage    String? @db.Text
+
+  answers MockAnswer[]
+  share   MockInterviewShare?
+
+  startedAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  @@index([candidateId, jobId])
+  @@map("mock_interviews")
+}
+
+model MockAnswer {
+  id              String           @id @default(cuid())
+  mockInterviewId String
+  mockInterview   MockInterview    @relation(fields: [mockInterviewId], references: [id], onDelete: Cascade)
+  questionId      String
+  question        PracticeQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  // Rehearsal IS the product, so retakes are first-class. Only isFinal
+  // attempts are analyzed and scored, which also keeps retakes free until the
+  // candidate commits to one.
+  attemptNo Int     @default(1)
+  isFinal   Boolean @default(true)
+
+  // TEXT mode answers land here; VIDEO/AUDIO modes fill the media fields and
+  // this is populated by ASR.
+  answerText String? @db.Text
+
+  mediaUrl        String? @db.Text
+  mediaPublicId   String? // for deletion at retention expiry
+  mimeType        String?
+  durationSeconds Float?
+
+  transcript   Json? // {text, words:[{w,start,end,conf}]}
+  metrics      Json? // the full deterministic measurement block
+  // 1 Hz downsample of the face track, for the UI timeline chart. The raw
+  // ~15 Hz per-frame track is aggregated and DISCARDED -- persisting per-frame
+  // facial geometry creates a biometric dataset with real obligations attached
+  // and no product use the aggregate doesn't already serve.
+  faceTimeline Json?
+  analysis     Json? // judge output + coaching
+  score        Float?
+
+  status           MockAnswerStatus @default(RECORDED)
+  errorMessage     String?          @db.Text
+  // Bounds automatic re-dispatch after a registry wipe. Media analysis is a
+  // pure function of durable inputs (blob + rubric), so a lost run is
+  // re-runnable -- but a genuinely poisonous input must not retry forever.
+  analysisAttempts Int              @default(0)
+  // Media retention; null = pinned by the candidate. A sweep deletes expired
+  // blobs by mediaPublicId.
+  expiresAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([mockInterviewId, questionId, attemptNo])
+  @@index([mockInterviewId])
+  @@map("mock_answers")
+}
+
+// Opt-in, revocable, and content-only by construction. The serializer that
+// builds the recruiter-visible payload is an ALLOWLIST over content scores and
+// the transcript -- never a denylist over the full object -- so a metric added
+// next quarter is invisible to recruiters by default.
+model MockInterviewShare {
+  id              String        @id @default(cuid())
+  mockInterviewId String        @unique
+  mockInterview   MockInterview @relation(fields: [mockInterviewId], references: [id], onDelete: Cascade)
+
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  scope     ShareScope @default(CONTENT_ONLY)
+  sharedAt  DateTime   @default(now())
+  revokedAt DateTime?
+
+  @@index([applicationId])
+  @@map("mock_interview_shares")
+}
+
+enum MockStatus {
+  CREATED
+  IN_PROGRESS
+  ANALYZING
+  COMPLETED
+  FAILED
+}
+
+enum MockMode {
+  VIDEO
+  AUDIO
+  TEXT
+}
+
+enum MockAnswerStatus {
+  RECORDED
+  UPLOADED
+  ANALYZING
+  ANALYZED
+  FAILED
+}
+
+enum ShareScope {
+  CONTENT_ONLY
 }
