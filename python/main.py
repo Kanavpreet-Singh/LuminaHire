@@ -839,6 +839,323 @@ async def vet_qa(req: VetQARequest):
         raise HTTPException(status_code=500, detail=f"Q&A failed: {str(e)}")
 
 
+# ── Interview Kits & Candidate Practice ────────────────────────
+#
+# Design: docs/interview-practice-design.md
+#
+# NOTE THE REQUEST MODELS BELOW. PracticeGenerateRequest carries a job and
+# nothing else; PersonalQuestionRequest carries resume text and nothing else.
+# Neither has a session_id or a candidate field it could arrive through. That
+# absence is the leak boundary, expressed as a request schema: practice
+# questions must never be derived from a vetting session's claims or verdicts,
+# or a candidate could learn which of their claims came back CONTRADICTED and
+# rehearse a cover story for exactly that gap. See python/practice.py's header.
+
+
+class InterviewKitRequest(BaseModel):
+    session_id: str
+    job: JobInput
+    candidate: CandidateInput
+    planner_output: dict | None = None
+    evaluation: dict | None = None
+    final_report: dict
+    instructions: str | None = None
+    duration_minutes: int = 45
+
+
+class PracticeGenerateRequest(BaseModel):
+    job_id: str
+    job: JobInput
+
+
+class PersonalQuestionRequest(BaseModel):
+    resume_text: str | None = None
+
+
+class MoreQuestionsRequest(BaseModel):
+    job_id: str
+    job: JobInput
+    category: str = "BEHAVIORAL"
+    count: int = 3
+    # Prompts this candidate has already been asked, so the top-up doesn't
+    # hand them the same question twice.
+    avoid: list[str] = []
+
+
+class JudgeAnswerRequest(BaseModel):
+    answer_id: str
+    question: dict          # {prompt, category, target_seconds, rubric}
+    answer_text: str
+    metrics: dict | None = None   # populated in AUDIO/VIDEO mode; absent for TEXT
+    mode: str = "TEXT"
+    accessibility_mode: bool = False
+    job_title: str | None = None
+
+
+class FinalizeMockRequest(BaseModel):
+    mock_interview_id: str
+    answers: list[dict]     # [{question_prompt, category, score, content_feedback}]
+    job_title: str | None = None
+    previous_overall: float | None = None
+
+
+@app.post("/interview/kit")
+@tracing.observe(name="interview_kit")
+async def interview_kit(req: InterviewKitRequest):
+    """
+    Build a runnable interview from a COMPLETED vetting session: laddered
+    questions bound to specific claims, a rubric each, and a time-boxed agenda.
+
+    Synchronous (one LLM call). Runs outside the LangGraph graph, alongside
+    /vet/qa, because the kit is a derived artifact of a finished evaluation
+    rather than a pipeline stage -- so it can be regenerated on demand with
+    different recruiter instructions, and its failure can never fail a vetting run.
+    """
+    import interview_kit as kit_module
+
+    tracing.start_session_trace(req.session_id, name="interview_kit")
+    tracing.reset_usage()
+    try:
+        kit = kit_module.generate_interview_kit(
+            _job_dict(req.job), _candidate_dict(req.candidate),
+            req.evaluation, req.final_report, req.planner_output,
+            instructions=req.instructions or "",
+            duration_minutes=req.duration_minutes,
+        )
+        kit["usage"] = tracing.get_usage()
+        return kit
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Interview kit generation failed: {str(e)}")
+
+
+@app.post("/practice/generate")
+@tracing.observe(name="practice_generate")
+async def practice_generate(req: PracticeGenerateRequest):
+    """
+    Generate a job's practice question set. Cached and versioned per job by the
+    caller, so this costs one call per JOB -- not one per candidate per attempt.
+    """
+    import practice
+
+    tracing.start_session_trace(req.job_id, name="practice_generate")
+    tracing.reset_usage()
+    try:
+        # Job only. There is no candidate or session argument to pass, by design.
+        result = practice.generate_practice_set(_job_dict(req.job))
+        result["usage"] = tracing.get_usage()
+        return result
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Practice set generation failed: {str(e)}")
+
+
+@app.post("/practice/more-questions")
+@tracing.observe(name="practice_more_questions")
+async def practice_more_questions(req: MoreQuestionsRequest):
+    """
+    Top up a candidate's practice queue with more questions in one category.
+
+    Note the request model: a job, a category, and the prompts already asked.
+    There is no candidate or session field. The caller scopes the resulting rows
+    to one candidate, but generation still sees only the job posting.
+    """
+    import practice
+
+    tracing.reset_usage()
+    try:
+        result = practice.generate_more_questions(
+            _job_dict(req.job), req.category, req.count, req.avoid
+        )
+        result["usage"] = tracing.get_usage()
+        return result
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Could not write more questions: {str(e)}")
+
+
+@app.post("/practice/personal-question")
+@tracing.observe(name="practice_personal_question")
+async def practice_personal_question(req: PersonalQuestionRequest):
+    """
+    The single PERSONAL practice question, generated from the candidate's own
+    resume text. Cached by resume hash on the candidate row, so a lightly-edited
+    re-upload that hashes the same never burns another call.
+    """
+    import practice
+
+    tracing.reset_usage()
+    try:
+        result = practice.generate_personal_question(req.resume_text)
+        if result:
+            result["usage"] = tracing.get_usage()
+        return result or {}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Personal question generation failed: {str(e)}")
+
+
+@app.post("/mock/judge-answer")
+@tracing.observe(name="mock_judge_answer")
+async def mock_judge_answer(req: JudgeAnswerRequest):
+    """
+    Score one practice answer.
+
+    Two layers, and the split is load-bearing (see python/scoring.py's header):
+    scoring.py computes every delivery/presence number deterministically from
+    `metrics`, and answer_judge.py's LLM call judges only content and language,
+    receiving those numbers as given facts. The model never produces a number
+    about how someone spoke.
+
+    Synchronous: TEXT mode is one LLM call. The media path (ffmpeg -> VAD -> ASR
+    -> prosody), which is CPU-bound and slow, gets its own async endpoint and
+    registry namespace when phase 3 lands.
+    """
+    import answer_judge
+    import scoring
+
+    tracing.reset_usage()
+    try:
+        judgement = answer_judge.judge_answer(
+            req.question, req.answer_text, req.metrics, req.job_title or ""
+        )
+        scored = scoring.score_answer(
+            req.metrics,
+            content_score=judgement.get("content_score"),
+            language_score=judgement.get("language_score"),
+            mode=req.mode,
+            accessibility_mode=req.accessibility_mode,
+        )
+        coaching = answer_judge.build_coaching(
+            judgement, req.metrics, scored.get("band_detail")
+        )
+        return {
+            "answer_id": req.answer_id,
+            "scores": scored["scores"],
+            "overall": scored["overall"],
+            "weights": scored["weights"],
+            "band_detail": scored["band_detail"],
+            "coaching": coaching,
+            "agent_error": judgement.get("agent_error"),
+            "usage": tracing.get_usage(),
+        }
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Answer judging failed: {str(e)}")
+
+
+class AnalyzeAnswerRequest(BaseModel):
+    answer_id: str
+    media_url: str | None = None
+    question: dict
+    # The browser's per-frame face track (~15 Hz). Aggregated server-side and
+    # then DISCARDED -- only the metrics and a 1 Hz timeline are persisted.
+    # Storing per-frame facial geometry would create a biometric dataset with
+    # real obligations attached and no product use the aggregate doesn't serve.
+    face_track: list[dict] | None = None
+    mode: str = "VIDEO"
+    accessibility_mode: bool = False
+    job_title: str | None = None
+    duration_seconds: float | None = None
+
+
+def _run_media_analysis(req: AnalyzeAnswerRequest):
+    """Background runner. Errors are captured onto the registry entry by
+    analyze_answer itself, so nothing here can raise into Starlette's threadpool."""
+    from media import pipeline
+
+    pipeline.analyze_answer(
+        req.answer_id,
+        req.media_url,
+        req.question,
+        face_track=req.face_track,
+        mode=req.mode,
+        accessibility_mode=req.accessibility_mode,
+        job_title=req.job_title or "",
+        client_duration_s=req.duration_seconds,
+    )
+
+
+@app.post("/mock/analyze-async", status_code=202)
+async def mock_analyze_async(req: AnalyzeAnswerRequest, background_tasks: BackgroundTasks):
+    """
+    Analyze one recorded answer in the background: demux, VAD, ASR, prosody,
+    face aggregation, calibration, then a single content/language judgement.
+
+    Returns 202 immediately; Next.js polls GET /mock/status/{answer_id}. Rejects
+    a duplicate in-flight run for the same answer with 409, same contract as the
+    vetting *-async endpoints.
+    """
+    from media import pipeline
+
+    key = pipeline.registry_key(req.answer_id)
+    if not registry.create(key, initial_phase="FETCHING"):
+        raise HTTPException(status_code=409, detail="Analysis already running for this answer.")
+
+    background_tasks.add_task(_run_media_analysis, req)
+    return {"status": "accepted", "answer_id": req.answer_id}
+
+
+@app.get("/mock/status/{answer_id}")
+async def mock_status(answer_id: str):
+    """
+    Poll a media analysis.
+
+    A 404 here does NOT mean the work is lost. Unlike the vetting pipeline --
+    where a registry wipe destroys unrecoverable in-flight agent state -- media
+    analysis is a pure function of durable inputs (the blob, the face-track
+    aggregate, the rubric), so the caller re-dispatches instead of failing the
+    answer. See src/lib/interview.ts and MockAnswer.analysisAttempts.
+    """
+    from media import pipeline
+
+    entry = registry.get(pipeline.registry_key(answer_id))
+    if entry is None:
+        raise HTTPException(status_code=404, detail="No active or recent analysis for this answer id.")
+    return {
+        "phase": entry["phase"],
+        "result": entry.get("final_report"),
+        "logs": entry.get("logs") or [],
+        "error": entry.get("error"),
+        "usage": entry.get("usage"),
+    }
+
+
+@app.get("/mock/capabilities")
+async def mock_capabilities():
+    """
+    What this deployment can actually measure. Exposed so a misconfigured box is
+    visible BEFORE a candidate records three minutes of video into a pipeline
+    that cannot transcribe it -- the UI offers text mode instead when
+    media_analysis_ready is false.
+    """
+    from media import pipeline
+
+    return pipeline.capabilities()
+
+
+@app.post("/mock/finalize")
+@tracing.observe(name="mock_finalize")
+async def mock_finalize(req: FinalizeMockRequest):
+    """
+    Cross-answer coaching at the end of a session — the patterns no single
+    answer can show. Second and last LLM call of an entire session.
+    """
+    import answer_judge
+
+    tracing.start_session_trace(req.mock_interview_id, name="mock_finalize")
+    tracing.reset_usage()
+    try:
+        coaching = answer_judge.summarize_session(
+            req.answers, req.job_title or "", req.previous_overall
+        )
+        coaching["usage"] = tracing.get_usage()
+        return coaching
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Session finalization failed: {str(e)}")
+
+
 @app.get("/vet/status/{session_id}")
 async def vet_status(session_id: str):
     """Poll a background run's phase and (once available) results."""

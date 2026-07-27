@@ -1,0 +1,18 @@
+# Media analysis for practice recordings (phases 3-4). Installed only when the
+# image is built with --build-arg WITH_MEDIA=1, because these add roughly 400MB
+# and a deployment that only runs the vetting pipeline should not carry them.
+#
+# Every import of these is LAZY and GUARDED (see python/media/*). Without them
+# the service still boots, mock mode still runs, every unit test still passes,
+# and the capability probe reports what is missing — the affected metrics are
+# simply absent from the score rather than counted as zero.
+#
+# CPU only, deliberately: faster-whisper runs on CTranslate2, so there is no
+# torch CUDA in this list. The one torch dependency is Silero VAD, which is a
+# small CPU model.
+
+faster-whisper==1.1.0     # ASR with word timestamps (CTranslate2, CPU int8)
+librosa==0.10.2.post1     # F0 + RMS for prosody
+soundfile==0.12.1         # librosa's audio backend
+torch==2.5.1              # Silero VAD only — install the CPU wheel:
+                          #   pip install torch --index-url https://download.pytorch.org/whl/cpu
